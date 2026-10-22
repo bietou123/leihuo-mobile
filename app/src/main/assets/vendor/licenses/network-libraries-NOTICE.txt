@@ -1,0 +1,82 @@
+Network runtime dependencies
+============================
+
+The following libraries are distributed without changes to their upstream
+source. Their license is Apache License 2.0; the complete text accompanies
+this notice in Apache-2.0-LICENSE.txt.
+
+The copyright statements below are retained from the source artifacts of
+the exact Maven versions listed here. The Public Suffix List resource in
+OkHttp has a separate MPL 2.0 license and notice.
+
+OkHttp 4.12.0
+-------------
+Artifact: com.squareup.okhttp3:okhttp:4.12.0
+Source: https://github.com/square/okhttp/tree/parent-4.12.0
+Source artifact:
+https://repo.maven.apache.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0-sources.jar
+
+Copyright (C) 2010 The Android Open Source Project
+Copyright (C) 2011 The Android Open Source Project
+Copyright (C) 2012 The Android Open Source Project
+Copyright (C) 2012 Square, Inc.
+Copyright (C) 2013 Square, Inc.
+Copyright (C) 2014 Square, Inc.
+Copyright (C) 2015 Square, Inc.
+Copyright (C) 2016 Square, Inc.
+Copyright (C) 2017 Square, Inc.
+Copyright (C) 2018 Square, Inc.
+Copyright (C) 2019 Square, Inc.
+Copyright (C) 2020 Square, Inc.
+Copyright 2013 Twitter, Inc.
+
+Okio 3.6.0
+----------
+Artifacts: com.squareup.okio:okio:3.6.0, com.squareup.okio:okio-jvm:3.6.0
+Source: https://github.com/square/okio/tree/parent-3.6.0
+Source artifact:
+https://repo.maven.apache.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0-sources.jar
+
+Copyright (C) 2014 Square, Inc.
+Copyright (C) 2015 Square, Inc.
+Copyright (C) 2016 Square, Inc.
+Copyright (C) 2017 Square, Inc.
+Copyright (C) 2018 Square, Inc.
+Copyright (C) 2019 Square, Inc.
+Copyright (C) 2020 Square, Inc.
+Copyright (C) 2020 Square, Inc. and others.
+Copyright (C) 2021 Square, Inc.
+Copyright (C) 2023 Square, Inc.
+Copyright 2014 Square Inc.
+
+Kotlin standard library 1.9.10
+------------------------------
+Artifacts: org.jetbrains.kotlin:kotlin-stdlib:1.9.10,
+org.jetbrains.kotlin:kotlin-stdlib-common:1.9.10,
+org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.10,
+org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.10
+Source: https://github.com/JetBrains/kotlin/tree/v1.9.10
+Source artifact:
+https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.10/kotlin-stdlib-1.9.10-sources.jar
+
+Copyright 2010-2015 JetBrains s.r.o.
+Copyright 2010-2016 JetBrains s.r.o.
+Copyright 2010-2017 JetBrains s.r.o.
+Copyright 2010-2018 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Copyright 2010-2019 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Copyright 2010-2020 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Copyright 2010-2021 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Copyright 2010-2022 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Copyright 2010-2023 JetBrains s.r.o. and Kotlin Programming Language contributors.
+
+JetBrains annotations 13.0
+--------------------------
+Artifact: org.jetbrains:annotations:13.0
+Upstream project: https://github.com/JetBrains/intellij-community
+Source artifact:
+https://repo.maven.apache.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0-sources.jar
+
+Copyright 2000-2009 JetBrains s.r.o.
+Copyright 2000-2012 JetBrains s.r.o.
+Copyright 2000-2013 JetBrains s.r.o.
+Copyright 2006 Sascha Weinreuter

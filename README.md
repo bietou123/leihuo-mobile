@@ -15,6 +15,14 @@ Android 安装版，界面参考 ChatGPT 手机版。连接网易雷火网关，
 
 支持流式回复、思考过程、Markdown/代码、停止、重新生成、编辑、复制、手机语音输入与朗读、模型搜索与收藏、深浅主题、对话导入与导出。生成的图片可保存到手机；支持声明图片编辑能力的模型上传图片编辑。
 
+### 1.2.2 VPN 网络恢复与视频续查
+
+针对 VPN 已连接但手机无法解析官方网关域名的情况，原生请求增加备用 HTTPS DNS 和有期限的私有地址缓存。优先使用系统 DNS，仅对雷火官方网关启用备用解析；保持原 HTTPS 域名和证书校验，不在 APK 中预置网关 IP。手机的 VPN 仍需能够访问网关所在网络。
+
+视频任务的 GET 查询遇到短暂网络问题时，最多额外重试 3 次，等待上限逐步增加到 90 秒；生成 POST 不自动重发。复制错误信息现在包含真实 HTTP 状态、错误来源、净化后的原因和查询重试次数。未收到 HTTP 响应时会明确说明。
+
+覆盖安装后打开原视频消息，点“继续查询视频”；已完成的任务可点“重新读取视频”。原任务编号会保留。本轮只读查询的已有任务在网关返回成功及 MP4 产物，手机播放尚未验证。网络恢复与诊断细节见 [docs/network-recovery.md](docs/network-recovery.md)。
+
 ### 1.2.1 视频、图片和音频兼容修复
 
 修复视频产物被封面或输入链接替代、同源视频内容接口缺少鉴权，以及部分 CDN 使用 `application/octet-stream` 导致播放器停在 0:00 的客户端问题。视频任务按已确认的结果字段读取；已完成的历史任务也提供“重新读取视频”，只查询原任务，不重新提交生成。播放失败会显示提示，支持复制不包含密钥、Cookie 或媒体签名链接的错误信息。
@@ -91,7 +99,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Outpu
 
 ## 验证情况
 
-先前的本地流程检查使用模拟原生响应，覆盖视频提交/查询/播放、断开后续查不重复提交、已完成视频内容获取、图片、MiMo/MiniMax 语音、ASR 音频上传、Seed 同步后的调用。H3/H3 Max、综合记忆及 1.2.1 的后续实现经过源码静态核对，尚未纳入该模拟检查；本轮没有添加或运行测试。没有进行综合记忆或此次修复的真机验证、计费模型调用；模拟检查不能代替真实模型调用。
+先前的本地流程检查使用模拟原生响应，覆盖视频提交/查询/播放、断开后续查不重复提交、已完成视频内容获取、图片、MiMo/MiniMax 语音、ASR 音频上传、Seed 同步后的调用。H3/H3 Max、综合记忆及 1.2.1、1.2.2 的后续实现经过源码静态核对，尚未纳入该模拟检查；本轮没有添加或运行测试。没有进行综合记忆或此次修复的真机验证、计费模型调用；模拟检查不能代替真实模型调用。
 
 ```powershell
 npm install --prefix "$env:LOCALAPPDATA/leihuo-web-check" jsdom@24.1.3 --ignore-scripts --no-audit --no-fund
@@ -100,4 +108,4 @@ node scripts/check-media-flow.mjs
 
 ## 许可证
 
-项目原创源码采用 [MIT 许可证](LICENSE)。第三方 JavaScript 组件、字体等保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 及 `app/src/main/assets/vendor/` 中随组件分发的许可证文件。
+项目原创源码采用 [MIT 许可证](LICENSE)。第三方 JavaScript 组件、字体和原生网络依赖等保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 及 `app/src/main/assets/vendor/` 中随组件分发的许可证文件。

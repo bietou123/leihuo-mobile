@@ -158,19 +158,20 @@
     });
   }
   function request(endpoint, body = null, options = {}) {
-    const id = uuid();
+    const id = uuid(), metadata = {};
+    const timeoutMs=Math.max(1000,Math.min(600000,Number(options.timeout) || 300000));
     const promise = new Promise((resolve, reject) => {
       if (!native) { reject(new Error('请在手机安装版内连接雷火网关。')); return; }
-      const entry = { resolve, reject, onData: options.onData, data: '', canceled: false, timer: null };
-      entry.timer = setTimeout(() => { native?.cancel(id); pending.delete(id); reject(new Error('等待回复超时，请检查手机网络；视频任务可以继续查询。')); }, options.timeout || 300000);
+      const entry = { resolve, reject, metadata, onData: options.onData, data: '', canceled: false, timer: null };
+      entry.timer = setTimeout(() => { native?.cancel(id); pending.delete(id); reject(Object.assign(new Error('等待回复超时，请检查手机网络；视频任务可以继续查询。'),{errorSource:'client_timeout',providerCode:'CLIENT_TIMEOUT',timeoutMs})); }, timeoutMs);
       pending.set(id, entry);
       const serialized = body == null ? '' : JSON.stringify(body);
       try {
-        if (native.requestWithOptions) native.requestWithOptions(id, JSON.stringify({ endpoint, method: options.method || (body == null ? 'GET' : 'POST'), body: serialized, stream: !!options.stream, headers: options.headers || {}, responseAsMedia:!!options.responseAsMedia, audioChunkStream:!!options.audioChunkStream, ...(options.audioMime ? {audioMime:options.audioMime} : {}), ...(options.multipart ? {multipart: options.multipart} : {}) }));
+        if (native.requestWithOptions) native.requestWithOptions(id, JSON.stringify({ endpoint, method: options.method || (body == null ? 'GET' : 'POST'), body: serialized, stream: !!options.stream, headers: options.headers || {}, readTimeoutMs:timeoutMs, responseAsMedia:!!options.responseAsMedia, audioChunkStream:!!options.audioChunkStream, ...(options.audioMime ? {audioMime:options.audioMime} : {}), ...(options.multipart ? {multipart: options.multipart} : {}) }));
         else native.request(id, endpoint, serialized, !!options.stream);
       } catch (error) { clearTimeout(entry.timer); pending.delete(id); reject(error); }
     });
-    return { id, promise };
+    return { id, promise, metadata };
   }
   function cancelRequest(id) {
     const entry = pending.get(id); if (!entry) return;
@@ -219,12 +220,14 @@
     if (event.id === 'interfaces') { if(event.type==='data'){ try { applyInterfaces(JSON.parse(event.data)); toast('接口信息已同步，现在可以继续使用模型。'); closeSheets(); }catch(error){toast(error.message,true);} }else if(event.type==='error')toast(event.data || '接口同步失败',true);return; }
     if (['media','attachment','external','export'].includes(event.id)) { if(event.type==='error')toast(event.data || '操作失败',true);else if(event.type==='data')toast(event.data || '已完成');return; }
     const entry = pending.get(event.id); if (!entry) return;
+    const receivedStatus=Number(event.status);
+    if(entry.metadata && Number.isInteger(receivedStatus) && receivedStatus>=100 && receivedStatus<=599)entry.metadata.httpStatus=receivedStatus;
     if (event.type === 'data') {
       entry.data = event.data;
       try { entry.onData?.(event.data, event.event); } catch (error) { clearTimeout(entry.timer); native?.cancel(event.id); pending.delete(event.id); entry.reject(error); }
     } else if (event.type === 'done' || event.type === 'error') {
       clearTimeout(entry.timer); pending.delete(event.id);
-      if (event.type === 'error') entry.reject(Object.assign(new Error(humanError(event.data, event.status)), {httpStatus:Number(event.status) || undefined}));
+      if (event.type === 'error') entry.reject(Object.assign(new Error(humanError(event.data, event.status)), window.LeihuoErrors?.fromNative?.(event.data,event.status) || {httpStatus:Number(event.status) || undefined,errorSource:'native_unknown'}));
       else { try { entry.resolve(JSON.parse(event.data || entry.data || '{}')); } catch { entry.resolve(event.data || entry.data); } }
     }
   };
@@ -380,15 +383,24 @@
   }
   function recordGenerationError(answer,error) {
     if(error.canceled)return;
-    answer.diagnostic={...(answer.diagnostic || {stage:'response'}),...(error.httpStatus?{httpStatus:error.httpStatus}:{})};
+    answer.diagnostic={...(answer.diagnostic || {stage:'response'}),errorSource:error.errorSource || 'response',safeMessage:window.LeihuoErrors?.safeMessage?.(error.safeMessage || error.message) || '未返回可安全复制的错误详情。',...(error.providerCode?{providerCode:window.LeihuoErrors?.safeMessage?.(error.providerCode)}:{}),...(error.timeoutMs?{timeoutMs:error.timeoutMs}:{}),...(error.httpStatus?{httpStatus:error.httpStatus}:{})};
   }
   function copyDiagnostic(message) {
     const stages={chat:'聊天请求',submit:'提交生成',query:'查询任务',content:'读取生成文件',response:'解析返回结果'};
     const details=[`雷火 ${$('appVersion').textContent}`,`模型：${message.model || '未知'}`];
     if(message.playbackError)details.push(`阶段：${message.playbackError.type==='video'?'视频':'音频'}播放`,`播放器错误：${message.playbackError.code}`);
     else details.push(`阶段：${stages[message.diagnostic?.stage] || '解析返回结果'}`);
-    if(message.diagnostic?.method)details.push(`请求方式：${message.diagnostic.method}`);
-    if(message.diagnostic?.httpStatus)details.push(`HTTP：${message.diagnostic.httpStatus}`);
+    const diagnostic=message.diagnostic || {};
+    if(diagnostic.method)details.push(`请求方式：${diagnostic.method}`);
+    const route=diagnostic.route || (diagnostic.stage==='query'?message.task?.query?.path:diagnostic.stage==='content'?message.task?.query?.contentPath:'');
+    if(route)details.push(`${message.playbackError?'任务接口':'接口'}：${window.LeihuoErrors?.safeRoute?.(route,message.task?.id) || '[接口路径已隐藏]'}`);
+    details.push(`${message.playbackError?'最近任务请求 HTTP':'HTTP'}：${diagnostic.httpStatus || '未记录响应状态'}`);
+    if(diagnostic.errorSource)details.push(`错误来源：${diagnostic.errorSource}`);
+    if(diagnostic.providerCode)details.push(`错误代码：${window.LeihuoErrors?.safeMessage?.(diagnostic.providerCode) || '[已隐藏]'}`);
+    if(diagnostic.timeoutMs)details.push(`等待上限：${Math.round(diagnostic.timeoutMs/1000)} 秒`);
+    if(diagnostic.retryCount)details.push(`查询重试：${diagnostic.retryCount}`);
+    const cause=diagnostic.safeMessage || message.error || (message.playbackError?playbackErrorText(message):'');
+    if(cause)details.push(`原因：${window.LeihuoErrors?.safeMessage?.(cause) || '未返回可安全复制的错误详情。'}`);
     if(message.task){details.push(`任务状态：${message.task.status}`);details.push(`任务编号：${/^[A-Za-z0-9._~-]{1,512}$/.test(String(message.task.id))?message.task.id:'[非标准编号已隐藏]'}`);}
     copy(details.join('\n'));
   }
@@ -492,7 +504,17 @@
     scheduleRender();
   }
   function ensureRun(run) { if(run?.canceled)throw Object.assign(new Error('已停止等待'),{canceled:true}); }
-  async function awaitRequest(call,run) { ensureRun(run); if(activeRun===run){activeRequest=call.id;resizeComposer();}const result=await call.promise;ensureRun(run);return result; }
+  async function awaitRequest(call,run) {
+    ensureRun(run);if(activeRun===run){activeRequest=call.id;resizeComposer();}
+    try {
+      const result=await call.promise;ensureRun(run);
+      if(run?.answer && call.metadata?.httpStatus)run.answer.diagnostic={...(run.answer.diagnostic || {}),httpStatus:call.metadata.httpStatus};
+      return result;
+    } catch(error) {
+      if(!error.httpStatus && call.metadata?.httpStatus)error.httpStatus=call.metadata.httpStatus;
+      throw error;
+    }
+  }
   async function generateChat(model, answer,run) {
     const protocol = chatRoute(model), instruction = combinedSystemInstruction(run); let endpoint, body, headers = {};
     if (protocol === 'responses') { endpoint='/v1/responses'; body={model:model.id,input:historyPayload(protocol,instruction),stream:true}; if(instruction)body.instructions=instruction; }
@@ -607,11 +629,33 @@
   }
   function mediaError(result) {
     if(!result || typeof result!=='object')return '';
-    if(result.error)return result.error.message || result.error || '模型调用失败';
-    if(result.data?.error)return result.data.error.message || result.data.error || '任务查询失败';
-    if(result.base_resp?.status_code)return result.base_resp.status_msg || '音频生成失败';
+    for(const error of [result.error,result.data?.error]) {
+      if(typeof error==='string' && error.trim())return error;
+      if(error && typeof error==='object') {
+        if(typeof error.message==='string' && error.message.trim())return error.message;
+        if(error.code!=null && error.code!=='' && ![0,'0','success','ok'].includes(error.code))return `接口返回 ${String(error.code)}`;
+        if(typeof error.type==='string' && error.type.trim())return `模型返回 ${error.type}`;
+      }
+      if(error===true)return '模型调用失败';
+    }
+    if(result.base_resp?.status_code && String(result.base_resp.status_code)!=='0')return result.base_resp.status_msg || '音频生成失败';
     if(result.code != null && ![0,20000000,'success','ok','accepted'].includes(result.code))return result.message || `接口返回 ${result.code}`;
     return '';
+  }
+  function responseFailure(result,message,source='provider') {
+    const reason=String(message || '模型调用失败');
+    return Object.assign(new Error(reason),window.LeihuoErrors?.fromResponse?.(result) || {},{errorSource:source,safeMessage:window.LeihuoErrors?.safeMessage?.(reason)});
+  }
+  async function waitForTask(milliseconds,run) {
+    ensureRun(run);
+    await new Promise((resolve,reject)=>{const id=uuid();if(activeRun===run)activeRequest=id;const timer=setTimeout(()=>{pending.delete(id);resolve();},milliseconds);pending.set(id,{resolve,reject,timer});});
+    ensureRun(run);
+  }
+  function retryableTaskRead(error,task) {
+    if(error.canceled || String(task.method || 'GET').toUpperCase()!=='GET')return false;
+    if(['native_tls','native_validation','native_parse'].includes(error.providerCode))return false;
+    if([408,429,500,502,503,504].includes(error.httpStatus))return true;
+    return ['CLIENT_TIMEOUT','native_timeout','native_dns','native_connect','native_io'].includes(error.providerCode);
   }
   function applyMediaResult(answer,result,model,task=answer.task?.query) {
     answer.media=extractMedia(result,kind(model),task);
@@ -636,11 +680,11 @@
     }
     if(template.task)template.task=window.LeihuoVideo?.normalizeTask?.(template.task) || template.task;
     if(template.multipart)template.multipart.fields=Object.fromEntries(Object.entries(template.body).map(([key,value])=>[key,typeof value==='string'?value:JSON.stringify(value)]));
-    answer.diagnostic={stage:'submit',method:template.method || 'POST'};
+    answer.diagnostic={stage:'submit',method:template.method || 'POST',route:window.LeihuoErrors?.safeRoute?.(template.endpoint)};
     const call = request(template.endpoint,template.body,{method:template.method,headers:template.headers,multipart:template.multipart,responseAsMedia:true,audioChunkStream:template.audioChunkStream,audioMime:template.audioMime,timeout:600000});
     let result = await awaitRequest(call,run);
     if (template.task) result = await pollTask(template, result, answer, model,run);
-    else {const error=mediaError(result);if(error)throw new Error(String(error));}
+    else {const error=mediaError(result);if(error)throw responseFailure(result,error);}
     applyMediaResult(answer,result,model,template.task);
   }
   function trimRawResult(result) { const json = JSON.stringify(result); return json.length<50000 ? result : undefined; }
@@ -648,32 +692,44 @@
     const task = window.LeihuoVideo?.normalizeTask?.(template.task) || template.task;
     const rawId=answer.task?.id || (task.idPaths || ['id','task_id','data.task_id','data.id']).map(path=>readResultPath(result,path)).find(value=>(typeof value==='string' && value.trim()) || (typeof value==='number' && Number.isFinite(value)));
     const taskId=rawId==null?'':String(rawId).trim();
-    if (!taskId) { const error=mediaError(result);if(error)throw new Error(String(error));if(extractMedia(result,kind(model),task).length)return result;throw new Error('网关未返回视频任务编号，未重复提交。'); }
+    if (!taskId) { const error=mediaError(result);if(error)throw responseFailure(result,error);if(extractMedia(result,kind(model),task).length)return result;throw new Error('网关未返回视频任务编号，未重复提交。'); }
     if(taskId.length>512 || /[\u0000-\u001f\u007f]/.test(taskId))throw new Error('网关返回的任务编号格式无效，未重复提交。');
     let queryNow=!!answer.task;
     if(!answer.task)answer.task={id:taskId,model:model.id,status:'pending',baseUrl:config.baseUrl,submittedAt:Date.now(),query:task,headers:template.headers || {}};
     else answer.task.query=task;
     persist();
     const deadline=Date.now()+20*60*1000;
+    let transientRetries=0;
     while(Date.now()<deadline) {
       ensureRun(run);
+      let queried=false;
       if(queryNow) {
         const endpoint=substitute(task.path,{'$TASK_ID':encodeURIComponent(taskId),'$MODEL':encodeURIComponent(model.id)});
-        answer.diagnostic={stage:'query',method:task.method || 'GET'};
-        const call=request(endpoint,task.body ? substitute(task.body,{'$TASK_ID':taskId,'$MODEL':model.id}):null,{method:task.method || 'GET',headers:substitute(task.headers || template.headers || {},{'$MODEL':model.id}),timeout:Math.min(30000,Math.max(1000,deadline-Date.now()))});
-        result=await awaitRequest(call,run);queryNow=false;
+        answer.diagnostic={stage:'query',method:task.method || 'GET',route:window.LeihuoErrors?.safeRoute?.(task.path,taskId),retryCount:transientRetries};
+        const call=request(endpoint,task.body ? substitute(task.body,{'$TASK_ID':taskId,'$MODEL':model.id}):null,{method:task.method || 'GET',headers:substitute(task.headers || template.headers || {},{'$MODEL':model.id}),timeout:Math.min(90000,60000+transientRetries*15000,Math.max(1000,deadline-Date.now()))});
+        try {result=await awaitRequest(call,run);queryNow=false;transientRetries=0;queried=true;}
+        catch(error) {
+          if(!retryableTaskRead(error,task) || transientRetries>=3 || Date.now()>=deadline)throw error;
+          transientRetries++;
+          answer.task.status='pending';answer.content=`正在重新连接视频任务（${transientRetries}/3）…`;
+          scheduleRender();
+          await waitForTask(Math.min([2000,5000,10000][transientRetries-1],Math.max(1,deadline-Date.now())),run);
+          continue;
+        }
       }
+      if(queried && (!result || typeof result!=='object' || Array.isArray(result)))throw Object.assign(new Error('任务查询没有返回有效的 JSON，请检查手机网络和网关地址。'),{errorSource:'response',providerCode:'QUERY_RESPONSE_INVALID'});
       const state=String((task.statusPaths || ['data.status','status','data.state','state']).map(path=>readResultPath(result,path)).find(Boolean) || '').trim().toLowerCase();
-      if(['failed','failure','error','canceled','cancelled','expired','rejected','unsuccessful'].includes(state)){answer.task.status='failed';const reason=(task.errorPaths || []).map(path=>readResultPath(result,path)).find(Boolean);throw new Error(typeof reason==='string'?reason:result.data?.fail_reason || result.fail_reason || result.message || '视频生成失败');}
-      const error=mediaError(result);if(error)throw new Error(String(error));
+      if(['failed','failure','error','canceled','cancelled','expired','rejected','unsuccessful'].includes(state)){answer.task.status='failed';const reason=(task.errorPaths || []).map(path=>readResultPath(result,path)).find(Boolean);throw responseFailure(result,typeof reason==='string'?reason:result.data?.fail_reason || result.fail_reason || result.message || '视频生成失败','task');}
+      const error=mediaError(result);if(error)throw responseFailure(result,error);
       const ready=extractMedia(result,kind(model),task).length>0;
+      if(queried && !state && !ready)throw Object.assign(new Error('查询结果缺少任务状态和视频地址，原任务编号已保留。'),{errorSource:'response',providerCode:'QUERY_STATUS_MISSING'});
       if(['succeed','succeeded','success','successful','completed','done','finish','finished'].includes(state) || (!state && ready)){
         answer.content='';
         if(!ready && task.contentPath){
           const endpoint=substitute(task.contentPath,{'$TASK_ID':encodeURIComponent(taskId),'$MODEL':encodeURIComponent(model.id)});
-          answer.diagnostic={stage:'content',method:'GET'};
+          answer.diagnostic={stage:'content',method:'GET',route:window.LeihuoErrors?.safeRoute?.(task.contentPath,taskId)};
           result=await awaitRequest(request(endpoint,null,{responseAsMedia:true,headers:template.headers,timeout:120000}),run);
-          const contentError=mediaError(result);if(contentError)throw new Error(String(contentError));
+          const contentError=mediaError(result);if(contentError)throw responseFailure(result,contentError);
         }
         return result;
       }
@@ -681,8 +737,7 @@
       answer.task.status='pending';answer.task.progress=progress;
       answer.content=/queued|submitted|not_start|pending/.test(state)?'视频已提交，正在排队…':`正在生成视频${progress?`（${String(progress).replace(/%$/,'')}%）`:'，请稍候…'}`;
       scheduleRender();
-      await new Promise((resolve,reject)=> { const id=uuid(); if(activeRun===run)activeRequest=id;const timer=setTimeout(()=>{pending.delete(id);resolve();},5000);pending.set(id,{resolve,reject,timer}); });
-      ensureRun(run);
+      await waitForTask(Math.min(5000,Math.max(1,deadline-Date.now())),run);
       queryNow=true;
     }
     throw new Error('视频仍在处理中，任务编号已保存，可以点击“继续查询视频”。');

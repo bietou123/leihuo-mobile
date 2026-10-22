@@ -81,6 +81,7 @@ public final class MainActivity extends Activity {
     private WebView webView;
     private FrameLayout frame;
     private ConfigStore config;
+    private GatewayNetwork gatewayNetwork;
     private ChatStore chats;
     private MemoryStore memory;
     private SharedPreferences interfacePrefs;
@@ -109,6 +110,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         config = new ConfigStore(this);
+        gatewayNetwork = new GatewayNetwork(this);
         chats = new ChatStore(this);
         memory = new MemoryStore(this);
         interfacePrefs = getSharedPreferences("interfaces", MODE_PRIVATE);
@@ -240,7 +242,7 @@ public final class MainActivity extends Activity {
             }
             for (int redirects = 0; redirects < 4; redirects++) {
                 if (!"https".equalsIgnoreCase(target.getProtocol()) || target.getUserInfo() != null) break;
-                connection = (HttpURLConnection) target.openConnection();
+                connection = gatewayNetwork.open(target);
                 connection.setConnectTimeout(20000);
                 connection.setReadTimeout(60000);
                 connection.setInstanceFollowRedirects(false);
@@ -374,7 +376,7 @@ public final class MainActivity extends Activity {
             URL target = initialTarget;
             for (int redirects = 0; redirects < 4; redirects++) {
                 if (!"https".equalsIgnoreCase(target.getProtocol()) || target.getUserInfo() != null) return null;
-                probe = (HttpURLConnection) target.openConnection();
+                probe = gatewayNetwork.open(target);
                 probe.setConnectTimeout(15000);
                 probe.setReadTimeout(20000);
                 probe.setInstanceFollowRedirects(false);
@@ -813,6 +815,7 @@ public final class MainActivity extends Activity {
 
     private void executeRequest(String id, JSONObject options, RequestTask task) {
         String secret = "";
+        int receivedStatus = 0;
         try {
             secret = config.apiKey();
             if (secret.isEmpty()) throw new IllegalArgumentException("请先在设置中填写雷火网关密钥");
@@ -830,11 +833,12 @@ public final class MainActivity extends Activity {
                 throw new IllegalArgumentException("不支持的请求方法");
             }
             if (task.cancelled) return;
-            HttpURLConnection connection = (HttpURLConnection) target.openConnection();
+            HttpURLConnection connection = gatewayNetwork.open(target);
             task.connection = connection;
             connection.setRequestMethod(method);
             connection.setConnectTimeout(25000);
-            connection.setReadTimeout(600000);
+            long requestedReadTimeout = options.optLong("readTimeoutMs", 600000L);
+            connection.setReadTimeout((int) Math.max(1000L, Math.min(600000L, requestedReadTimeout)));
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Authorization", "Bearer " + secret);
             if (endpoint.contains("/messages")) connection.setRequestProperty("x-api-key", secret);
@@ -874,6 +878,7 @@ public final class MainActivity extends Activity {
                 try (OutputStream output = connection.getOutputStream()) { output.write(requestBytes); }
             }
             int status = connection.getResponseCode();
+            receivedStatus = status > 0 ? status : 0;
             if (canReferenceVideoContentRedirect(target, method, options, status, connection.getHeaderField("Location"))) {
                 // The API bridge does not follow the redirect or send its key to a new origin.
                 // Playback reopens this protected URL through the media proxy's per-hop checks.
@@ -930,13 +935,68 @@ public final class MainActivity extends Activity {
             if (!task.cancelled) emit(id, "done", null, status, null);
         } catch (Exception failure) {
             if (!task.cancelled) {
-                String message = failure.getMessage();
-                if (message == null || message.isEmpty()) message = "网络请求失败，请检查网关地址和连接";
-                emit(id, "error", redact(message, secret), 0, null);
+                emit(id, "error", nativeRequestFailure(failure, secret), receivedStatus, null);
             }
         } finally {
             if (task.connection != null) task.connection.disconnect();
             active.remove(id, task);
+        }
+    }
+
+    private static String nativeRequestFailure(Throwable failure, String secret) {
+        Throwable selected = failure;
+        int selectedPriority = 0;
+        String code = "native_unknown", source = "unknown", fallback = "请求失败，请检查网关地址和手机连接";
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < 8; depth++) {
+            int priority = 0;
+            String causeCode = "native_unknown", causeSource = "unknown", causeFallback = fallback;
+            if (cause instanceof java.net.SocketTimeoutException) {
+                priority = 100; causeCode = "native_timeout"; causeSource = "network_timeout"; causeFallback = "网络读取或连接超时";
+            } else if (cause instanceof java.net.UnknownHostException) {
+                priority = 100; causeCode = "native_dns"; causeSource = "network_dns"; causeFallback = "无法解析网关域名";
+            } else if (cause instanceof javax.net.ssl.SSLException) {
+                priority = 120; causeCode = "native_tls"; causeSource = "network_tls"; causeFallback = "HTTPS 安全连接失败";
+            } else if (cause instanceof java.net.ConnectException) {
+                priority = 100; causeCode = "native_connect"; causeSource = "network_connect"; causeFallback = "无法连接网关";
+            } else if (cause instanceof org.json.JSONException) {
+                priority = 70; causeCode = "native_parse"; causeSource = "local_parse"; causeFallback = "请求或返回的数据无法解析";
+            } else if (cause instanceof IllegalArgumentException || cause instanceof IllegalStateException
+                    || cause instanceof java.net.MalformedURLException || cause instanceof java.net.URISyntaxException) {
+                priority = 60; causeCode = "native_validation"; causeSource = "local_validation"; causeFallback = "请求参数或本地状态无效";
+            } else if (cause instanceof java.io.IOException) {
+                priority = 50; causeCode = "native_io"; causeSource = "io"; causeFallback = "读取或保存请求数据失败";
+            }
+            if (priority >= selectedPriority) {
+                selected = cause; selectedPriority = priority; code = causeCode; source = causeSource; fallback = causeFallback;
+            }
+            Throwable next = cause.getCause();
+            if (next == cause) break;
+            cause = next;
+        }
+        String message = selected == null ? null : selected.getMessage();
+        if (message == null || message.trim().isEmpty()) message = fallback;
+        if (selectedPriority >= 100) {
+            // Socket/TLS exception messages can include resolved private addresses.
+            // The stable code and source retain the network failure category.
+            message = fallback;
+        }
+        if (selected instanceof org.json.JSONException) {
+            // Android JSON exceptions can append the complete input or offending body value.
+            int inputMarker = message.indexOf(" at character ");
+            if (inputMarker >= 0) message = message.substring(0, inputMarker);
+            else if (!message.matches("No value for [A-Za-z0-9_.-]{1,64}")) message = fallback;
+        }
+        message = redact(message, secret)
+                .replaceAll("(?<![A-Za-z0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![A-Za-z0-9])", "[网络地址已隐藏]")
+                .replaceAll("(?i)(https?://[^\\s?#]+)\\?[^\\s]*", "$1?[查询参数已隐藏]")
+                .replaceAll("(?is)(\\b(?:header(?: name| value)?|[A-Za-z0-9-]+ value)\\s*[:=]).*", "$1 [已隐藏]")
+                .replaceAll("[\\x00-\\x1F\\x7F]", " ").trim();
+        if (message.length() > 1024) message = message.substring(0, 1024) + "…";
+        try {
+            return new JSONObject().put("error", new JSONObject().put("message", message).put("code", code).put("source", source)).toString();
+        } catch (Exception ignored) {
+            return "{\"error\":{\"message\":\"请求失败\",\"code\":\"native_unknown\",\"source\":\"unknown\"}}";
         }
     }
 
@@ -1246,7 +1306,7 @@ public final class MainActivity extends Activity {
                     input = null;
                     for (int redirects = 0; redirects < 5; redirects++) {
                         if (!"https".equalsIgnoreCase(target.getProtocol()) || target.getUserInfo() != null) throw new IllegalArgumentException("图片链接必须是 HTTPS 地址");
-                        connection = (HttpURLConnection) target.openConnection();
+                        connection = gatewayNetwork.open(target);
                         connection.setConnectTimeout(20000);
                         connection.setReadTimeout(60000);
                         connection.setInstanceFollowRedirects(false);
