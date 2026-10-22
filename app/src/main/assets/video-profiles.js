@@ -7,9 +7,20 @@
     path: '/v1/video/generations/$TASK_ID', method: 'GET',
     idPaths: ['task_id', 'id', 'data.task_id', 'data.id'],
     statusPaths: ['data.status', 'status', 'data.task_status', 'task_status'],
-    mediaPaths: ['data.url', 'data.result_url', 'url', 'result_url', 'metadata.url', 'data.data.content.video_url', 'data.data.output.video_url'],
+    mediaPaths: [
+      'data.url', 'data.result_url', 'url', 'result_url', 'metadata.url',
+      'content.video_url', 'data.content.video_url', 'data.data.content.video_url',
+      'output.video_url', 'data.output.video_url', 'data.data.output.video_url', 'data'
+    ],
     errorPaths: ['data.fail_reason', 'data.reason', 'data.error.message', 'data.data.error.message', 'data.data.output.message', 'error.message', 'message'],
     contentPath: '/v1/videos/$TASK_ID/content'
+  });
+  const SEEDANCE_TASK = Object.freeze({
+    method: 'GET',
+    idPaths: ['id', 'task_id', 'data.id', 'data.task_id'],
+    statusPaths: ['status', 'data.status', 'task_status', 'data.task_status'],
+    mediaPaths: ['content.video_url', 'data.content.video_url'],
+    errorPaths: ['error.message', 'data.error.message', 'message', 'data.message']
   });
   const WAN_SIZES = Object.freeze({
     '480p': {'16:9': '832*480', '9:16': '480*832', '1:1': '624*624'},
@@ -120,14 +131,53 @@
     } catch { return false; }
   }
 
-  // A native Seedance submit path alone does not prove its query path. Only
-  // use native requests when both routes were explicitly authenticated.
+  function supportedTypes(model) {
+    return Array.isArray(model?.supported_endpoint_types) ? model.supported_endpoint_types : [];
+  }
+
+  function normalizeTask(task) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)
+      || String(task.method || 'GET').toUpperCase() !== 'GET'
+      || !['/v1/video/generations/$TASK_ID', '/v1/videos/$TASK_ID'].includes(task.path)) return task;
+    const supplied = Object.fromEntries(Object.entries(task).filter(([,value]) => value !== undefined));
+    const mediaPaths = Array.isArray(task.mediaPaths) ? task.mediaPaths.filter(path => typeof path === 'string' && path) : [];
+    return {...TASK, ...supplied, mediaPaths: [...new Set([...mediaPaths, ...TASK.mediaPaths])]};
+  }
+
+  function standardVideoRoute(model, endpointMap) {
+    const type = supportedTypes(model).find(value =>
+      (value === 'openai-video' || value === 'openai-video-gen') && endpointMap?.[value]?.synced === true);
+    if (!type) return {endpoint: '/v1/video/generations', method: 'POST', task: {...TASK}};
+    const route = endpointMap[type];
+    const path = typeof route.path === 'string' ? route.path.replace(/\/+$/, '') : '';
+    if (String(route.method || '').toUpperCase() !== 'POST' || !validLocalPath(path)) {
+      throw new Error('已同步的视频接口方法或路径无效，请重新登录雷火同步接口。');
+    }
+    if (!['/v1/video/generations', '/v1/videos'].includes(path)) {
+      throw new Error(`已同步的视频接口 ${path} 尚未完成适配。输入内容已保留，请反馈所选模型和接口信息。`);
+    }
+    return {endpoint: path, method: 'POST', task: {...TASK, path: `${path}/$TASK_ID`}};
+  }
+
+  // The public Ark contract uses one authenticated collection path for POST
+  // creation and GET /{id} queries. Other private paths need a verified task
+  // mapping; a synced submit route alone does not prove their query path.
   function nativeSeedanceRoute(endpointMap) {
     const route = endpointMap?.seedance;
+    if (route?.synced !== true) return null;
     const task = route?.task;
-    if (route?.synced !== true || String(route.method || '').toUpperCase() !== 'POST' || !validLocalPath(route.path)) return null;
-    if (task?.synced !== true || String(task.method || '').toUpperCase() !== 'GET' || !validLocalPath(task.path) || !task.path.includes('$TASK_ID')) return null;
-    return {endpoint: route.path, method: 'POST', task: {...TASK, ...task}};
+    const path = typeof route.path === 'string' ? route.path.replace(/\/+$/, '') : '';
+    if (String(route.method || '').toUpperCase() !== 'POST' || !validLocalPath(path)) {
+      throw new Error('已同步的 Seedance 接口方法或路径无效，请重新登录雷火同步接口。');
+    }
+    if (task?.synced === true && String(task.method || '').toUpperCase() === 'GET'
+      && validLocalPath(task.path) && task.path.includes('$TASK_ID')) {
+      return {endpoint: path, method: 'POST', task: {...SEEDANCE_TASK, ...task}};
+    }
+    if (path.endsWith('/api/v3/contents/generations/tasks')) {
+      return {endpoint: path, method: 'POST', task: {...SEEDANCE_TASK, path: `${path}/$TASK_ID`}};
+    }
+    throw new Error('已同步的 Seedance 接口缺少已确认的任务查询映射。输入内容已保留，请反馈所选模型和接口信息。');
   }
 
   function syncedRoute(endpointMap, type, method) {
@@ -203,7 +253,8 @@
     } else if (profile.kind === 'seedance') {
       body.seconds = String(duration); // rc.21 Doubao does not read top-level duration.
       body.metadata = {resolution, ratio: aspectRatio, generate_audio: generateAudio};
-      const nativeRoute = nativeSeedanceRoute(endpointMap);
+      const nativeRoute = typeof model === 'string' || supportedTypes(model).includes('seedance')
+        ? nativeSeedanceRoute(endpointMap) : null;
       if (nativeRoute) {
         return {...nativeRoute, body: {
           model: body.model,
@@ -225,8 +276,8 @@
       body.size = images.length ? resolution.toUpperCase() : WAN_SIZES[resolution][aspectRatio];
       body.metadata = {parameters: {duration, audio: generateAudio}};
     }
-    return {endpoint: '/v1/video/generations', method: 'POST', body, task: {...TASK}};
+    return {...standardVideoRoute(model, endpointMap), body};
   }
 
-  window.LeihuoVideo = Object.freeze({template, profileFor, defaultsFor, constraintsFor, optionsFor, isVideoModel, defaults: DEFAULTS});
+  window.LeihuoVideo = Object.freeze({template, normalizeTask, profileFor, defaultsFor, constraintsFor, optionsFor, isVideoModel, defaults: DEFAULTS});
 }());

@@ -15,6 +15,16 @@ Android 安装版，界面参考 ChatGPT 手机版。连接网易雷火网关，
 
 支持流式回复、思考过程、Markdown/代码、停止、重新生成、编辑、复制、手机语音输入与朗读、模型搜索与收藏、深浅主题、对话导入与导出。生成的图片可保存到手机；支持声明图片编辑能力的模型上传图片编辑。
 
+### 1.2.1 视频、图片和音频兼容修复
+
+修复视频产物被封面或输入链接替代、同源视频内容接口缺少鉴权，以及部分 CDN 使用 `application/octet-stream` 导致播放器停在 0:00 的客户端问题。视频任务按已确认的结果字段读取；已完成的历史任务也提供“重新读取视频”，只查询原任务，不重新提交生成。播放失败会显示提示，支持复制不包含密钥、Cookie 或媒体签名链接的错误信息。
+
+视频模板覆盖 Veo、Seedance、Wan 和 MiniMax H3/H3 Max，并遵循登录同步的已确认路由。Seedance 原厂任务路径可从已同步的 Ark 集合接口取得对应 GET 查询；未知私有路由在提交前提示。
+
+图片请求补齐 Gemini 全部参考图、Seedream 的 `image`、Qwen 的原厂 `input`，图片面板尺寸写入标准图片请求。音频补齐 MiMo 声音设计的预览文字，修复音频 URL 被误当作 Base64。原生媒体读取和图片保存按文件头兼容常见图片、音频、MP4 和 WebM 的二进制响应，保留 Range 播放与拖动。
+
+本轮完成源码静态审查和 release 构建，未运行模型生成或逐型号计费实测，也未在手机上验证此次修复。接口转换依据与部署限制见 [docs/image-routing.md](docs/image-routing.md)、[docs/audio-routing.md](docs/audio-routing.md) 和 [docs/video-routing.md](docs/video-routing.md)。
+
 ### 1.2.0 综合记忆
 
 默认开启“综合记忆”。升级后会自动汇入已有对话，之后各个聊天窗口里的用户文字、AI 回复和已提取的文件文字都会进入同一份记忆。新建对话、切换历史窗口或更换聊天模型时，会根据当前问题带入相关记忆；不用每次重新介绍自己。
@@ -33,7 +43,7 @@ Android 安装版，界面参考 ChatGPT 手机版。连接网易雷火网关，
 
 ### 媒体调用范围
 
-1.1 版加入普通媒体的直接调用流程，并保存视频任务编号：停止等待、断网或重启后，可继续查询同一个任务。表单模板覆盖 3 个 Veo、4 个 Seedance、Wan 3.0、MiMo 和 MiniMax Speech；Seed 和 MiniMax H3/H3 Max 的专用路径从登录后的官方映射取得。H3 系列仅在同步到提交与单任务查询接口后启用，支持文字和单张首帧图片。使用默认时长时，Veo 为 8 秒，Seedance/Wan 为 5 秒，H3/H3 Max 为 10 秒、768p，可在发送栏设置。
+1.1 版加入普通媒体的直接调用流程，并保存视频任务编号：停止等待、断网或重启后，可继续查询同一个任务。1.2.1 也允许重新读取已完成任务。表单模板识别 Veo、Seedance、Wan、MiMo 和 MiniMax Speech 模型家族；Seed 和 MiniMax H3/H3 Max 的专用路径从登录后的官方映射取得。H3 系列仅在同步到提交与单任务查询接口后启用，支持文字和单张首帧图片。使用默认时长时，Veo 为 8 秒，Seedance/Wan 为 5 秒，H3/H3 Max 为 10 秒、768p，可在发送栏设置。
 
 3D、Jev、丹青约等能力仍需相应协议定义；没有定义的模型不会自动发送猜测的生成请求。Seed 的原厂参数和 H3 的 V2 契约已接入，但其雷火内部渠道选择和所有模型的实际生成结果尚未逐个验证。旧公开 rc.21 的 Wan 3 适配器会丢弃比例字段，内部网关是否修复仍待实际结果确认。源码证据见 [docs/gateway-api.md](docs/gateway-api.md)、[docs/audio-routing.md](docs/audio-routing.md)、[docs/video-routing.md](docs/video-routing.md) 和 [docs/h3-routing.md](docs/h3-routing.md)。模型权限和余额由你的雷火账号决定。
 
@@ -81,7 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Outpu
 
 ## 验证情况
 
-先前的本地流程检查使用模拟原生响应，覆盖视频提交/查询/播放、断开后续查不重复提交、已完成视频内容获取、图片、MiMo/MiniMax 语音、ASR 音频上传、Seed 同步后的调用。H3/H3 Max 与综合记忆后续实现经过源码静态核对，尚未纳入该模拟检查。没有进行综合记忆真机或计费模型调用测试；模拟检查不能代替真实模型调用。
+先前的本地流程检查使用模拟原生响应，覆盖视频提交/查询/播放、断开后续查不重复提交、已完成视频内容获取、图片、MiMo/MiniMax 语音、ASR 音频上传、Seed 同步后的调用。H3/H3 Max、综合记忆及 1.2.1 的后续实现经过源码静态核对，尚未纳入该模拟检查；本轮没有添加或运行测试。没有进行综合记忆或此次修复的真机验证、计费模型调用；模拟检查不能代替真实模型调用。
 
 ```powershell
 npm install --prefix "$env:LOCALAPPDATA/leihuo-web-check" jsdom@24.1.3 --ignore-scripts --no-audit --no-fund

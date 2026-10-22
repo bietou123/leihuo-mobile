@@ -1,6 +1,6 @@
 # 视频请求模板与兼容边界
 
-记录日期：2026-10-21。客户端实现位于 `app/src/main/assets/video-profiles.js`。
+记录日期：2026-10-21；路由修正更新：2026-10-22。客户端实现位于 `app/src/main/assets/video-profiles.js`。
 
 雷火状态接口报告 `New API v1.0.0-rc.21-internal.9`。以下标准入口和转换格式来自公开 `v1.0.0-rc.21` 源码；新模型的参数范围另参考公开 `main` 的原厂插件。内部版本可能有新增处理，不能把公共源码视为本实例的逐模型生成实测。本次没有提交视频生成请求。
 
@@ -33,13 +33,23 @@ MiniMax H3 与 H3 Max 的 V2 原厂协议已由官方 OpenAPI 取得，helper �
 
 ## 标准提交和任务查询
 
-默认提交入口：`POST /v1/video/generations`。
+没有认证同步映射时，仍使用有公开 rc.21 源码依据的默认提交入口：`POST /v1/video/generations`，不改变已经对应转换器的请求正文字段。
 
-查询入口：`GET /v1/video/generations/{公开任务ID}`。任务 ID 优先读取 `task_id`、`id`、`data.task_id`、`data.id`；状态优先读取 `data.status` 或 `status`。视频常见路径为 `data.url`、`data.result_url`；失败说明包括 `data.fail_reason` 和 `data.reason`。
+模型的 `supported_endpoint_types` 声明 `openai-video` 或 `openai-video-gen`，且该类型的映射带 `synced: true` 时，优先采用真实同步路径。目前只接受已注册且有源码依据的 `POST /v1/video/generations` 和 `POST /v1/videos`；查询分别使用 `GET /v1/video/generations/{公开任务ID}` 和 `GET /v1/videos/{公开任务ID}`。标准任务 ID 优先读取 `task_id`、`id`、`data.task_id`、`data.id`；状态优先读取 `data.status` 或 `status`。视频常见路径为 `data.url`、`data.result_url`、`metadata.url`；失败说明包括 `data.fail_reason` 和 `data.reason`。其他模型类型的全局同步映射不会覆盖当前模型声明的类型。
 
-helper 的 `task` 还提供 `mediaPaths`、`errorPaths` 和已注册的媒体入口 `/v1/videos/$TASK_ID/content`。认证、状态轮询、任务保存、媒体下载由 App 的主流程处理。不能因为提交成功就显示已生成，也不能因失败自动换协议重新提交。
+如果当前模型已同步的视频类型返回其他未证实路径，或者方法不是 POST，在提交前显示明确错误并保留输入。不能忽略同步结果后悄悄转到默认接口，也不能在实际生成失败后换协议再次 POST。
 
-Seedance 的专用路由仅在 `endpointMap.seedance` 的提交记录和其 `task` 查询记录都带 `synced: true`、方法分别为 POST/GET，并且使用合法本地路径时启用；查询路径还必须明确包含 `$TASK_ID`。只有一个提交路径时仍使用有源码依据的标准任务路由，不推导未知私有查询路径。
+helper 的 `task` 还提供 `mediaPaths`、`errorPaths` 和已注册的媒体入口 `/v1/videos/$TASK_ID/content`。标准任务的产物路径包括 `url`、`result_url` 及 `data` 包装，OpenAI 视频对象的 `metadata.url`，原厂结果的 `content.video_url`、`output.video_url` 及一层或两层 `data` 包装。为兼容直接返回产物地址的标准结果，`data` 本身也列为候选，但只有它是有效媒体 URL 字符串时才接受；`data` 对象、普通文本和包含网址的 JSON 字符串不能当成视频。视频任务应只按这些已声明的产物路径识别媒体，不能递归把 `input.url`、请求地址或封面链接当成视频。
+
+认证、状态轮询、任务保存、媒体下载由 App 的主流程处理。不能因为提交成功就显示已生成，也不能因失败自动换协议重新提交。
+
+1.2.1 增加 `LeihuoVideo.normalizeTask(task)` 兼容旧任务配置：仅当方法缺省或为 GET，且查询路径严格是 `/v1/video/generations/$TASK_ID` 或 `/v1/videos/$TASK_ID` 时，补齐标准任务的缺省字段，包括输出地址和 `/v1/videos/$TASK_ID/content` 媒体兜底。既有已设置字段保留；`mediaPaths` 合并已确认的标准输出路径，保留既有路径顺序。这修复旧标准模板只有任务 ID 和状态字段、恢复后无法识别 `data.url` / `data.result_url` / `metadata.url` 的缺口。未知自定义路径、原生 Seedance 和 H3 配置原样返回，不套用标准公开任务 ID 的媒体入口。规范化只影响原任务的查询配置，不重新 POST 创建任务。
+
+Seedance 原生模板只用于当前模型声明 `seedance` 的情况（helper 直接接受模型 ID 字符串时保留兼容行为）。`endpointMap.seedance` 必须带 `synced: true`、方法为 POST、路径为合法本地路径。若其路径严格以公开 Ark 集合接口 `/api/v3/contents/generations/tasks` 结尾，可依据同一原厂契约使用此路径加 `/$TASK_ID` 作为 GET 查询地址，并保留认证映射中的网关前缀。登录同步只有 `path/method` 也能启用这一已证实的创建及查询组合；不接受未经资料确认的 `/v3/...` 变体，不推导任意其他私有路径。
+
+兼容旧式完整配置：提交记录可以携带 `task` 查询记录，但该记录仍须独立带 `synced: true`、方法 GET、合法本地路径和 `$TASK_ID`。若已同步提交地址不符合公开 Ark 路径形状，且没有通过上述校验的完整查询映射，则在提交前报错并保留输入；不回落标准接口。完全没有认证同步时才保留现有标准转换模板。
+
+原生 Seedance 创建响应读取 `id`（兼容 `task_id` 及 `data` 包装），查询读取 `status`、`content.video_url`、`error.message`。原生 ID 与标准网关公开任务 ID 不同，因此原生查询配置不自动携带 `/v1/videos/{id}/content` 标准媒体兜底。
 
 H3 查询路径可规范化已有 `{id}`、`{task_id}`、`:id`、`:task_id` 或 `$TASK_ID` 占位符。没有占位符时，仅在真实同步路径以 `/query/video_generation` 结尾时，依据已证实的 V2 查询协议追加 `/$TASK_ID`；其他没有任务 ID 的未知路径不会启用。H3 状态是字符串 `queued/running/succeeded/failed/cancelled`，分别读取 `task.status`、`task.content.url` 和 `task.error.message`，并兼容网关 `data` 包装。
 

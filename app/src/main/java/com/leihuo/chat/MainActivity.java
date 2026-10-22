@@ -40,6 +40,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
@@ -55,6 +56,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -84,6 +86,9 @@ public final class MainActivity extends Activity {
     private SharedPreferences interfacePrefs;
     private final ExecutorService requests = Executors.newFixedThreadPool(4);
     private final Map<String, RequestTask> active = new ConcurrentHashMap<>();
+    private final Map<String, String> mediaMimes = new LinkedHashMap<String, String>(64, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, String> eldest) { return size() > 64; }
+    };
     private ValueCallback<Uri[]> fileCallback;
     private String pendingExport;
     private String pendingExportTitle;
@@ -221,6 +226,7 @@ public final class MainActivity extends Activity {
             String method = request.getMethod();
             if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) throw new IllegalArgumentException();
             URL target = new URL(request.getUrl().toString());
+            String originalMediaUrl = target.toExternalForm();
             Map<String, String> rangeHeaders = new HashMap<>();
             for (Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                 String name = header.getKey();
@@ -240,7 +246,11 @@ public final class MainActivity extends Activity {
                 connection.setInstanceFollowRedirects(false);
                 connection.setRequestMethod(method.toUpperCase(Locale.ROOT));
                 connection.setRequestProperty("Accept-Encoding", "identity");
-                // Generated media URLs are fetched without the gateway API key or cookies.
+                // Only the current gateway's exact video-content route may receive its key.
+                // A new connection and origin/path check are required on every redirect.
+                String mediaKey = gatewayVideoContentKey(target);
+                if (!mediaKey.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + mediaKey);
+                // Browser cookies and authorization headers are never forwarded to media URLs.
                 for (Map.Entry<String, String> header : rangeHeaders.entrySet()) connection.setRequestProperty(header.getKey(), header.getValue());
                 int status = connection.getResponseCode();
                 if (status >= 300 && status < 400) {
@@ -253,18 +263,42 @@ public final class MainActivity extends Activity {
                 String mime = connection.getContentType();
                 if (status < 200 || status >= 300 || mime == null) break;
                 mime = mime.toLowerCase(Locale.ROOT).split(";")[0].trim();
+                InputStream responseInput = null;
+                boolean detectedMime = false;
+                if (mime.equals("application/octet-stream")) {
+                    String mediaUrl = target.toExternalForm();
+                    String contentRange = connection.getHeaderField("Content-Range");
+                    boolean startsAtZero = startsAtByteZero(status, contentRange);
+                    if (!"HEAD".equalsIgnoreCase(method) && startsAtZero) {
+                        BufferedInputStream buffered = new BufferedInputStream(connection.getInputStream());
+                        responseInput = buffered;
+                        mime = sniffMediaMime(buffered);
+                        // A browser may initially ask for only one byte, which cannot identify a container.
+                        if (mime == null && status == 206) mime = cachedMediaMime(mediaUrl, originalMediaUrl);
+                        if (mime == null && status == 206) mime = probeMediaMime(target, originalMediaUrl);
+                    } else {
+                        mime = cachedMediaMime(mediaUrl, originalMediaUrl);
+                        if (mime == null) mime = probeMediaMime(target, originalMediaUrl);
+                    }
+                    if (mime == null) break;
+                    detectedMime = true;
+                }
                 if (mime.equals("image/svg+xml") || (!mime.startsWith("image/") && !mime.startsWith("audio/") && !mime.startsWith("video/"))) break;
+                rememberMediaMime(target.toExternalForm(), originalMediaUrl, mime);
                 Map<String, String> responseHeaders = new HashMap<>();
                 for (String name : new String[]{"Content-Type", "Content-Range", "Accept-Ranges", "Content-Length", "Cache-Control", "ETag", "Last-Modified", "Expires"}) {
                     String value = connection.getHeaderField(name);
                     if (value != null && value.indexOf('\r') < 0 && value.indexOf('\n') < 0) responseHeaders.put(name, value);
                 }
+                if (detectedMime) responseHeaders.put("Content-Type", mime);
                 responseHeaders.put("X-Content-Type-Options", "nosniff");
                 String reason = connection.getResponseMessage();
                 if (reason != null) reason = reason.replaceAll("[^\\x20-\\x7E]", "").trim();
                 if (reason == null || reason.isEmpty()) reason = status == 206 ? "Partial Content" : "OK";
                 HttpURLConnection source = connection;
-                InputStream input = new FilterInputStream(connection.getInputStream()) {
+                InputStream body = "HEAD".equalsIgnoreCase(method) ? new ByteArrayInputStream(new byte[0])
+                        : responseInput == null ? connection.getInputStream() : responseInput;
+                InputStream input = new FilterInputStream(body) {
                     @Override public void close() throws java.io.IOException {
                         try { super.close(); } finally { source.disconnect(); }
                     }
@@ -276,6 +310,207 @@ public final class MainActivity extends Activity {
         }
         if (connection != null) connection.disconnect();
         return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
+    }
+
+    private String gatewayVideoContentKey(URL target) throws Exception {
+        synchronized (config) {
+            return isGatewayVideoContent(target) ? config.apiKey() : "";
+        }
+    }
+
+    private boolean isGatewayVideoContent(URL target) throws Exception {
+        synchronized (config) {
+            URL gateway = new URL(config.baseUrl());
+            if (!"https".equalsIgnoreCase(gateway.getProtocol()) || !"https".equalsIgnoreCase(target.getProtocol())
+                    || gateway.getUserInfo() != null || target.getUserInfo() != null
+                    || !gateway.getHost().equalsIgnoreCase(target.getHost())
+                    || effectiveHttpsPort(gateway) != effectiveHttpsPort(target)) return false;
+            String path = target.toURI().getRawPath();
+            // Restrict IDs to unreserved characters: encoded slash/backslash and nested encoding
+            // cannot alter the route after the key has been attached.
+            return path != null && path.matches("/v1/videos/(?!\\./)[A-Za-z0-9._~-]+/content") && !path.contains("..");
+        }
+    }
+
+    private boolean canReferenceVideoContentRedirect(URL target, String method, JSONObject options, int status, String location) throws Exception {
+        if (!"GET".equals(method) || !options.optBoolean("responseAsMedia", false)
+                || (status != 301 && status != 302 && status != 303 && status != 307 && status != 308)
+                || !isGatewayVideoContent(target) || location == null || location.trim().isEmpty()
+                || location.indexOf('\r') >= 0 || location.indexOf('\n') >= 0) return false;
+        try {
+            URL destination = new URL(target, location);
+            java.net.URI uri = destination.toURI();
+            return "https".equalsIgnoreCase(destination.getProtocol()) && destination.getUserInfo() == null
+                    && uri.getHost() != null && uri.getRawUserInfo() == null
+                    && (destination.getPort() == -1 || (destination.getPort() > 0 && destination.getPort() <= 65535));
+        } catch (Exception invalidLocation) {
+            return false;
+        }
+    }
+
+    private static int effectiveHttpsPort(URL url) { return url.getPort() == -1 ? 443 : url.getPort(); }
+
+    private static boolean startsAtByteZero(int status, String contentRange) {
+        return status != 206 || (contentRange != null && contentRange.matches("(?i)bytes +0-[0-9]+/(?:[0-9]+|\\*)"));
+    }
+
+    private String cachedMediaMime(String mediaUrl, String originalMediaUrl) {
+        synchronized (mediaMimes) {
+            String mime = mediaMimes.get(mediaUrl);
+            return mime == null ? mediaMimes.get(originalMediaUrl) : mime;
+        }
+    }
+
+    private void rememberMediaMime(String mediaUrl, String originalMediaUrl, String mime) {
+        synchronized (mediaMimes) {
+            mediaMimes.put(mediaUrl, mime);
+            mediaMimes.put(originalMediaUrl, mime);
+        }
+    }
+
+    private String probeMediaMime(URL initialTarget, String originalMediaUrl) {
+        HttpURLConnection probe = null;
+        try {
+            URL target = initialTarget;
+            for (int redirects = 0; redirects < 4; redirects++) {
+                if (!"https".equalsIgnoreCase(target.getProtocol()) || target.getUserInfo() != null) return null;
+                probe = (HttpURLConnection) target.openConnection();
+                probe.setConnectTimeout(15000);
+                probe.setReadTimeout(20000);
+                probe.setInstanceFollowRedirects(false);
+                probe.setRequestMethod("GET");
+                probe.setRequestProperty("Range", "bytes=0-1023");
+                probe.setRequestProperty("Accept-Encoding", "identity");
+                String mediaKey = gatewayVideoContentKey(target);
+                if (!mediaKey.isEmpty()) probe.setRequestProperty("Authorization", "Bearer " + mediaKey);
+                // The probe is a separate read-only media request, without browser cookies/headers.
+                int status = probe.getResponseCode();
+                if (status >= 300 && status < 400) {
+                    String location = probe.getHeaderField("Location");
+                    probe.disconnect();
+                    probe = null;
+                    if (location == null) return null;
+                    target = new URL(target, location);
+                    continue;
+                }
+                if (status < 200 || status >= 300 || !startsAtByteZero(status, probe.getHeaderField("Content-Range"))) return null;
+                // Even when a server ignores Range and returns 200, consume at most 1 KiB.
+                try (BufferedInputStream input = new BufferedInputStream(probe.getInputStream(), 1024)) {
+                    try {
+                        String mime = sniffMediaMime(input);
+                        if (mime != null) {
+                            rememberMediaMime(target.toExternalForm(), originalMediaUrl, mime);
+                            rememberMediaMime(initialTarget.toExternalForm(), originalMediaUrl, mime);
+                        }
+                        return mime;
+                    } finally {
+                        // Abort the remainder before closing the stream, so connection reuse
+                        // cannot drain an entire response from a server that ignored Range.
+                        probe.disconnect();
+                        probe = null;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // A failed signature probe never grants an unknown binary a playable media type.
+        } finally {
+            if (probe != null) probe.disconnect();
+        }
+        return null;
+    }
+
+    private static String sniffMediaMime(BufferedInputStream input) throws java.io.IOException {
+        byte[] prefix = new byte[1024];
+        int count = 0;
+        input.mark(prefix.length);
+        try {
+            while (count < prefix.length) {
+                int read = input.read(prefix, count, prefix.length - count);
+                if (read == -1) break;
+                if (read == 0) break;
+                count += read;
+            }
+        } finally { input.reset(); }
+        if (count >= 8 && (prefix[0] & 255) == 0x89 && prefix[1] == 'P' && prefix[2] == 'N' && prefix[3] == 'G'
+                && prefix[4] == 13 && prefix[5] == 10 && prefix[6] == 26 && prefix[7] == 10) return "image/png";
+        if (count >= 3 && (prefix[0] & 255) == 0xff && (prefix[1] & 255) == 0xd8 && (prefix[2] & 255) == 0xff) return "image/jpeg";
+        if (count >= 12 && prefixEquals(prefix, 0, count, "RIFF")) {
+            if (count >= 16 && prefixEquals(prefix, 8, count, "WEBP")
+                    && (prefixEquals(prefix, 12, count, "VP8 ") || prefixEquals(prefix, 12, count, "VP8L")
+                    || prefixEquals(prefix, 12, count, "VP8X"))) return "image/webp";
+            if (prefixEquals(prefix, 8, count, "WAVE")) return "audio/wav";
+        }
+        if (count >= 8 && prefixEquals(prefix, 0, count, "fLaC") && (prefix[4] & 127) == 0
+                && prefix[5] == 0 && prefix[6] == 0 && prefix[7] == 34) return "audio/flac";
+        if (count >= 10 && prefixEquals(prefix, 0, count, "ID3")) {
+            int version = prefix[3] & 255;
+            int allowedFlags = version == 2 ? 0xc0 : version == 3 ? 0xe0 : version == 4 ? 0xf0 : 0;
+            if (allowedFlags != 0 && (prefix[4] & 255) != 255 && ((prefix[5] & 255) & ~allowedFlags) == 0
+                    && (prefix[6] & 128) == 0 && (prefix[7] & 128) == 0
+                    && (prefix[8] & 128) == 0 && (prefix[9] & 128) == 0) return "audio/mpeg";
+        }
+        if (count >= 4 && (prefix[0] & 255) == 255 && (prefix[1] & 224) == 224) {
+            int version = (prefix[1] >> 3) & 3, layer = (prefix[1] >> 1) & 3;
+            int bitrate = (prefix[2] >> 4) & 15, sampleRate = (prefix[2] >> 2) & 3;
+            // Reserved values and AAC ADTS headers cannot be accepted as MP3.
+            if (version != 1 && layer == 1 && bitrate != 0 && bitrate != 15 && sampleRate != 3
+                    && (prefix[3] & 3) != 2) return "audio/mpeg";
+        }
+        if (count >= 27 && prefixEquals(prefix, 0, count, "OggS") && prefix[4] == 0
+                && (prefix[5] & 2) != 0 && (prefix[5] & 0xf9) == 0) {
+            int segments = prefix[26] & 255, payload = 27 + segments;
+            if (segments > 0 && payload <= count) {
+                int packetSize = 0;
+                for (int index = 0; index < segments; index++) {
+                    int size = prefix[27 + index] & 255;
+                    packetSize += size;
+                    if (size < 255) break;
+                }
+                if (packetSize >= 19 && payload + 19 <= count && prefixEquals(prefix, payload, count, "OpusHead")
+                        && prefix[payload + 8] == 1 && (prefix[payload + 9] & 255) > 0) return "audio/ogg";
+                if (packetSize >= 30 && payload + 30 <= count && prefix[payload] == 1
+                        && prefixEquals(prefix, payload + 1, count, "vorbis")
+                        && prefix[payload + 7] == 0 && prefix[payload + 8] == 0
+                        && prefix[payload + 9] == 0 && prefix[payload + 10] == 0
+                        && (prefix[payload + 11] & 255) > 0 && prefix[payload + 29] == 1) {
+                    int smallBlock = prefix[payload + 28] & 15, largeBlock = (prefix[payload + 28] >> 4) & 15;
+                    if (smallBlock >= 6 && largeBlock <= 13 && largeBlock >= smallBlock
+                            && (prefix[payload + 12] != 0 || prefix[payload + 13] != 0
+                            || prefix[payload + 14] != 0 || prefix[payload + 15] != 0)) return "audio/ogg";
+                }
+            }
+        }
+        if (count >= 16 && prefix[4] == 'f' && prefix[5] == 't' && prefix[6] == 'y' && prefix[7] == 'p') {
+            long boxSize = ((prefix[0] & 255L) << 24) | ((prefix[1] & 255L) << 16) | ((prefix[2] & 255L) << 8) | (prefix[3] & 255L);
+            if (boxSize >= 16) {
+                String majorBrand = new String(prefix, 8, 4, StandardCharsets.US_ASCII);
+                if (majorBrand.matches("(?:M4[ABPR] |F4[AB] )")) return "audio/mp4";
+                if (majorBrand.matches("(?:avif|avis|heic|heix|hevc|hevx|mif1|msf1)")) return null;
+                int limit = (int) Math.min(boxSize, count);
+                for (int offset = 8; offset + 4 <= limit; offset += offset == 8 ? 8 : 4) {
+                    String brand = new String(prefix, offset, 4, StandardCharsets.US_ASCII);
+                    if (brand.matches("(?:isom|iso[2-9]|mp4[12]|avc1|hvc1|hev1|av01|dash|cmfc|cmfs)")) return "video/mp4";
+                }
+            }
+        }
+        if (count >= 11 && (prefix[0] & 255) == 0x1a && (prefix[1] & 255) == 0x45
+                && (prefix[2] & 255) == 0xdf && (prefix[3] & 255) == 0xa3) {
+            // WebM declares its DocType in the EBML header; the magic alone also matches Matroska.
+            for (int offset = 4; offset + 7 <= count; offset++) {
+                if ((prefix[offset] & 255) == 0x42 && (prefix[offset + 1] & 255) == 0x82
+                        && (prefix[offset + 2] & 255) == 0x84 && prefix[offset + 3] == 'w'
+                        && prefix[offset + 4] == 'e' && prefix[offset + 5] == 'b' && prefix[offset + 6] == 'm') return "video/webm";
+            }
+        }
+        return null;
+    }
+
+    private static boolean prefixEquals(byte[] prefix, int offset, int count, String value) {
+        if (offset < 0 || offset > count - value.length()) return false;
+        for (int index = 0; index < value.length(); index++) {
+            if ((prefix[offset + index] & 255) != value.charAt(index)) return false;
+        }
+        return true;
     }
 
     private WebResourceResponse loadGeneratedMedia(WebResourceRequest request) {
@@ -639,6 +874,16 @@ public final class MainActivity extends Activity {
                 try (OutputStream output = connection.getOutputStream()) { output.write(requestBytes); }
             }
             int status = connection.getResponseCode();
+            if (canReferenceVideoContentRedirect(target, method, options, status, connection.getHeaderField("Location"))) {
+                // The API bridge does not follow the redirect or send its key to a new origin.
+                // Playback reopens this protected URL through the media proxy's per-hop checks.
+                JSONObject media = new JSONObject().put("__remoteMedia", true).put("type", "video").put("url", target.toExternalForm());
+                if (!task.cancelled) {
+                    emit(id, "data", redact(media.toString(), secret), status, null);
+                    emit(id, "done", null, status, null);
+                }
+                return;
+            }
             InputStream input = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
             if (status < 200 || status >= 300) {
                 String error = input == null ? "网关请求失败" : new String(readAll(input, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8);
@@ -648,6 +893,13 @@ public final class MainActivity extends Activity {
             }
             String mime = connection.getContentType();
             mime = mime == null ? "application/json" : mime.toLowerCase(Locale.ROOT);
+            if (input != null && options.optBoolean("responseAsMedia", false)
+                    && mime.split(";")[0].trim().equals("application/octet-stream")) {
+                BufferedInputStream buffered = new BufferedInputStream(input);
+                input = buffered;
+                String detectedMime = sniffMediaMime(buffered);
+                if (detectedMime != null) mime = detectedMime;
+            }
             if (input == null) {
                 emit(id, "data", "", status, null);
             } else if (options.optBoolean("audioChunkStream", false)) {
@@ -1010,9 +1262,13 @@ public final class MainActivity extends Activity {
                         if (status < 200 || status >= 300) throw new IllegalArgumentException("无法下载图片，请稍后重试");
                         String type = connection.getContentType();
                         mime = type == null ? "" : type.toLowerCase(Locale.ROOT).split(";")[0].trim();
-                        if (!mime.startsWith("image/") || mime.contains("svg")) throw new IllegalArgumentException("该链接不是可保存的图片");
                         if (connection.getContentLengthLong() > MAX_RESPONSE_BYTES) throw new IllegalArgumentException("图片不能超过 64 MB");
-                        input = connection.getInputStream();
+                        if (mime.equals("application/octet-stream")) {
+                            BufferedInputStream buffered = new BufferedInputStream(connection.getInputStream());
+                            input = buffered;
+                            mime = sniffMediaMime(buffered);
+                        } else input = connection.getInputStream();
+                        if (mime == null || !mime.startsWith("image/") || mime.contains("svg")) throw new IllegalArgumentException("该链接不是可保存的图片");
                         break;
                     }
                     if (input == null || mime == null) throw new IllegalArgumentException("图片链接重定向次数过多");

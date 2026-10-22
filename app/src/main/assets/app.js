@@ -162,7 +162,7 @@
     const promise = new Promise((resolve, reject) => {
       if (!native) { reject(new Error('请在手机安装版内连接雷火网关。')); return; }
       const entry = { resolve, reject, onData: options.onData, data: '', canceled: false, timer: null };
-      entry.timer = setTimeout(() => { native?.cancel(id); pending.delete(id); reject(new Error('等待回复超时，请检查手机网络或稍后重新生成。')); }, options.timeout || 300000);
+      entry.timer = setTimeout(() => { native?.cancel(id); pending.delete(id); reject(new Error('等待回复超时，请检查手机网络；视频任务可以继续查询。')); }, options.timeout || 300000);
       pending.set(id, entry);
       const serialized = body == null ? '' : JSON.stringify(body);
       try {
@@ -224,7 +224,7 @@
       try { entry.onData?.(event.data, event.event); } catch (error) { clearTimeout(entry.timer); native?.cancel(event.id); pending.delete(event.id); entry.reject(error); }
     } else if (event.type === 'done' || event.type === 'error') {
       clearTimeout(entry.timer); pending.delete(event.id);
-      if (event.type === 'error') entry.reject(new Error(humanError(event.data, event.status)));
+      if (event.type === 'error') entry.reject(Object.assign(new Error(humanError(event.data, event.status)), {httpStatus:Number(event.status) || undefined}));
       else { try { entry.resolve(JSON.parse(event.data || entry.data || '{}')); } catch { entry.resolve(event.data || entry.data); } }
     }
   };
@@ -335,18 +335,19 @@
       const media = (message.media || []).map(item => {
         const src = safeMediaUrl(item.url); if (!src) return '';
         if (item.type === 'image') return `<figure class="generated-media"><img src="${esc(src)}" alt="生成的图片" loading="lazy"><button class="media-open" data-open-media="${esc(src)}" aria-label="打开图片">打开图片</button></figure>`;
-        if (item.type === 'audio') return `<audio controls preload="none" src="${esc(src)}"></audio>`;
-        if (item.type === 'video') return `<video controls preload="metadata" playsinline src="${esc(src)}"></video>`;
+        if (item.type === 'audio') return `<audio controls preload="none" data-media-message="${esc(message.id)}" src="${esc(src)}"></audio>`;
+        if (item.type === 'video') return `<video controls preload="metadata" playsinline data-media-message="${esc(message.id)}" src="${esc(src)}"></video>`;
         return `<a href="${esc(src)}" class="file-result">${esc(item.label || '打开生成结果')}</a>`;
       }).join('');
       const attached = (message.attachments || []).map(file => file.type === 'image' ? `<img class="message-attachment" src="${esc(file.data)}" alt="${esc(file.name)}">` : `<div class="message-file">${icon('file')} ${esc(file.name)}</div>`).join('');
       const thinking = message.reasoning ? `<details class="reasoning"><summary>${message.streaming ? '正在思考' : '思考过程'}</summary><div>${markdown(message.reasoning)}</div></details>` : '';
       const error = message.error ? `<div class="message-error">${esc(message.error)}</div>` : '';
-      const resumable=message.task && !['completed','failed'].includes(message.task.status);
+      const resumable=message.task?.query?.path && message.task.status!=='failed';
       const tools = message.role === 'assistant' && !message.streaming ? `<div class="message-actions"><button data-copy-message="${index}" aria-label="复制">${icon('copy')}</button><button data-read-message="${index}" aria-label="朗读">${icon('volume')}</button>${resumable ? `<button data-resume-task="${index}" aria-label="继续查询视频">${icon('refresh')}</button>` : `<button data-regenerate="${index}" aria-label="重新生成">${icon('refresh')}</button>`}<span class="message-model">${esc(friendlyName(message.model || activeChat.model))}</span></div>` : message.role === 'user' ? `<div class="message-actions user-actions"><button data-edit-message="${index}" aria-label="编辑消息">${icon('edit')}</button><button data-copy-message="${index}" aria-label="复制">${icon('copy')}</button></div>` : '';
-      const taskAction=resumable&&!message.streaming?`<button class="media-open" data-resume-task="${index}">继续查询视频</button>`:'';
+      const taskAction=resumable&&!message.streaming?`<button class="media-open" data-resume-task="${index}">${message.task.status==='completed'?'重新读取视频':'继续查询视频'}</button>`:'';
+      const playbackError=`<div class="message-error" data-playback-error${message.playbackError?'':' hidden'}>${esc(playbackErrorText(message))}</div>`;
       const syncAction=message.requiresInterfaceSync?'<button class="media-open" data-sync-interfaces>登录雷火并同步接口</button>':'';
-      return `<article class="message ${message.role}" data-message-id="${esc(message.id)}">${attached}${thinking}<div class="message-content">${message.role === 'user' ? esc(message.content).replace(/\n/g,'<br>') : markdown(message.content)}${message.streaming && !message.content && !message.reasoning ? '<span class="thinking-dot" aria-label="正在生成"></span>' : ''}</div>${media}${taskAction}${syncAction}${error}${tools}</article>`;
+      return `<article class="message ${message.role}" data-message-id="${esc(message.id)}">${attached}${thinking}<div class="message-content">${message.role === 'user' ? esc(message.content).replace(/\n/g,'<br>') : markdown(message.content)}${message.streaming && !message.content && !message.reasoning ? '<span class="thinking-dot" aria-label="正在生成"></span>' : ''}</div>${media}${playbackError}${taskAction}${syncAction}${error}<div data-media-feedback>${mediaFeedbackControls(message,index)}</div>${tools}</article>`;
     }).join('');
     $('messages').querySelectorAll('pre code').forEach(code => { try { window.hljs?.highlightElement(code); } catch { /* incomplete streaming code */ } });
     if (forceScroll) requestAnimationFrame(() => { $('messageViewport').scrollTop = $('messageViewport').scrollHeight; });
@@ -354,6 +355,43 @@
   }
   function scheduleRender() { if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = null; renderMessages(); }, 80); }
   function safeMediaUrl(value) { return typeof value === 'string' && (/^https:\/\//i.test(value) || /^data:(image|audio|video)\//i.test(value)) ? value : ''; }
+  function playbackErrorText(message) {
+    if(!message.playbackError)return '';
+    const label=message.playbackError.type==='video'?'视频':'音频';
+    const reason=({1:'播放被中断',2:'文件读取失败',3:'文件无法解码',4:'地址或格式无法播放'})[message.playbackError.code] || '文件加载失败';
+    return `${label}${reason}。${message.task?.query?.path && message.task.status!=='failed'?'可点“重新读取视频”查询原任务。':'可检查网络后重新加载媒体。'}`;
+  }
+  function mediaFeedbackControls(message,index) {
+    if(message.role!=='assistant' || (!message.error && !message.playbackError))return '';
+    const reload=message.playbackError && !(message.task?.query?.path && message.task.status!=='failed')?`<button class="media-open" data-reload-media="${index}">重新加载媒体</button>`:'';
+    return `${reload}<button class="media-open" data-copy-diagnostic="${index}">复制错误信息</button>`;
+  }
+  function mediaPlaybackEvent(event) {
+    const player=event.target;if(!player.matches?.('audio[data-media-message],video[data-media-message]'))return;
+    const index=activeChat?.messages.findIndex(message=>message.id===player.dataset.mediaMessage);
+    if(index==null || index<0)return;
+    const message=activeChat.messages[index],article=player.closest('article');
+    if(event.type!=='error' && !message.playbackError)return;
+    if(event.type==='error')message.playbackError={type:player.tagName==='VIDEO'?'video':'audio',code:player.error?.code || 0};
+    else delete message.playbackError;
+    const error=article?.querySelector('[data-playback-error]');if(error){error.hidden=!message.playbackError;error.textContent=playbackErrorText(message);}
+    const controls=article?.querySelector('[data-media-feedback]');if(controls)controls.innerHTML=mediaFeedbackControls(message,index);
+    persist();
+  }
+  function recordGenerationError(answer,error) {
+    if(error.canceled)return;
+    answer.diagnostic={...(answer.diagnostic || {stage:'response'}),...(error.httpStatus?{httpStatus:error.httpStatus}:{})};
+  }
+  function copyDiagnostic(message) {
+    const stages={chat:'聊天请求',submit:'提交生成',query:'查询任务',content:'读取生成文件',response:'解析返回结果'};
+    const details=[`雷火 ${$('appVersion').textContent}`,`模型：${message.model || '未知'}`];
+    if(message.playbackError)details.push(`阶段：${message.playbackError.type==='video'?'视频':'音频'}播放`,`播放器错误：${message.playbackError.code}`);
+    else details.push(`阶段：${stages[message.diagnostic?.stage] || '解析返回结果'}`);
+    if(message.diagnostic?.method)details.push(`请求方式：${message.diagnostic.method}`);
+    if(message.diagnostic?.httpStatus)details.push(`HTTP：${message.diagnostic.httpStatus}`);
+    if(message.task){details.push(`任务状态：${message.task.status}`);details.push(`任务编号：${/^[A-Za-z0-9._~-]{1,512}$/.test(String(message.task.id))?message.task.id:'[非标准编号已隐藏]'}`);}
+    copy(details.join('\n'));
+  }
   function resizeComposer() {
     const input = $('messageInput'); input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
     const busy = !!activeRun || !!activeRequest, hasContent = !!input.value.trim() || !!attachments.length; $('sendButton').hidden = busy || !hasContent; $('stopButton').hidden = !busy;
@@ -477,13 +515,18 @@
     const types = model.supported_endpoint_types || [], category = kind(model), allFiles = mediaFiles ?? activeChat?.messages.filter(m=>m.role==='user').at(-1)?.attachments ?? [], files=allFiles.filter(file=>file.type==='image'), image = files[0]?.data;
     if(category==='语音')return window.LeihuoAudio?.template(model,prompt,allFiles,audioOptionsByModel[model.id] || {},endpointMap) || null;
     if(category==='视频' && window.LeihuoVideo){const video=LeihuoVideo.template(model,prompt,allFiles,videoOptions(model),endpointMap);if(video)return video;}
+    if(category==='图片' && allFiles.some(file=>file.type!=='image'))throw new Error('图片生成目前只支持照片附件，请移除其他文件后发送；输入内容已保留。');
     if (image && types.includes('openai-image-edit-endpoint')) {
       const body={model:model.id,prompt,n:1,size:'1024x1024'};
       return {endpoint:'/v1/images/edits',body,multipart:{fields:Object.fromEntries(Object.entries(body).map(([key,value])=>[key,String(value)])),files:files.map((file,index)=>({field:files.length>1?'image[]':'image',name:`image-${index}.jpg`,mime:'image/jpeg',base64:file.data.split(',')[1]}))}};
     }
-    if (category === '图片' && types.includes('gemini')) return {endpoint:`/v1beta/models/${encodeURIComponent(model.id)}:generateContent`,body:{contents:[{role:'user',parts:[{text:prompt},...(image?[{inlineData:{mimeType:'image/jpeg',data:image.split(',')[1]}}]:[])]}],generationConfig:{responseModalities:['TEXT','IMAGE']}}};
-    if (types.includes('openai-image-generation') || types.includes('image-generation')) return {endpoint:'/v1/images/generations',body:{model:model.id,prompt,n:1,...(/seedream-(4-5|5-0)/i.test(model.id)?{size:'2048x2048'}:/^gpt-image/i.test(model.id)?{size:'1024x1024'}:{})}};
-    if (category === '图片' && types.includes('openai')) return {endpoint:'/v1/chat/completions',body:{model:model.id,messages:[{role:'user',content:prompt}],stream:false}};
+    if (category === '图片' && types.includes('gemini')) return {endpoint:`/v1beta/models/${encodeURIComponent(model.id)}:generateContent`,body:{contents:[{role:'user',parts:[{text:prompt},...files.map(file=>({inlineData:{mimeType:'image/jpeg',data:file.data.split(',')[1]}}))]}],generationConfig:{responseModalities:['TEXT','IMAGE']}}};
+    if (types.includes('openai-image-generation') || types.includes('image-generation')) {
+      const seedream=/seedream/i.test(model.id),qwen=/^qwen-image/i.test(model.id);
+      if(files.length && !seedream && !qwen)throw new Error('这个图片模型尚未接通图片编辑，请选择支持图片编辑的模型；附件已保留。');
+      return {endpoint:'/v1/images/generations',body:{model:model.id,prompt,n:1,...(/seedream-(4-5|5-0)/i.test(model.id)?{size:'2048x2048'}:/^gpt-image/i.test(model.id)?{size:'1024x1024'}:{}),...(seedream&&files.length?{image:files.length===1?image:files.map(file=>file.data)}:{}),...(qwen&&files.length?{input:{messages:[{role:'user',content:[...files.map(file=>({image:file.data})),{text:prompt}]}]}}:{})}};
+    }
+    if (category === '图片' && types.includes('openai')) return {endpoint:'/v1/chat/completions',body:{model:model.id,messages:[{role:'user',content:files.length?[{type:'text',text:prompt},...files.map(file=>({type:'image_url',image_url:{url:file.data}}))]:prompt}],stream:false}};
     if (/asr|voiceclone|voicedesign/i.test(model.id) && types.includes('openai')) return null;
     if (types.includes('openai-embedding')) return {endpoint:'/v1/embeddings',body:{model:model.id,input:prompt}};
     const template = findTemplate(model);
@@ -499,33 +542,68 @@
     if (Array.isArray(value)) return value.map(v=>substitute(v,vars));
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,substitute(v,vars)])); return value;
   }
-  function extractMedia(result, preferredKind = '') {
+  function readResultPath(result,path) { return path.split('.').reduce((value,key)=>value?.[key],result); }
+  function mediaType(mime) { return /^(?:image|audio|video)\//i.test(mime || '') ? String(mime).split('/')[0].toLowerCase() : ''; }
+  function urlMediaType(value) {
+    const inline=/^data:(image|audio|video)\//i.exec(value);
+    if(inline)return inline[1].toLowerCase();
+    let path;try{path=new URL(value).pathname;}catch{return '';}
+    if(/\.(?:png|jpe?g|webp|gif|avif|bmp|svg)$/i.test(path))return 'image';
+    if(/\.(?:mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i.test(path))return 'audio';
+    if(/\.(?:mp4|webm|mov|m4v)$/i.test(path))return 'video';
+    if(/\.(?:glb|gltf|obj|fbx|zip)$/i.test(path))return 'file';
+    return '';
+  }
+  function extractMedia(result, preferredKind = '', task = null) {
     const media = [], seen = new Set();
-    const add = (type,url,label) => { if (safeMediaUrl(url) && !seen.has(url)) { seen.add(url); media.push({type,url,label}); } };
-    if (result?.__binary) add(/audio/.test(result.mime)?'audio':/video/.test(result.mime)?'video':'image',`data:${result.mime};base64,${result.base64}`);
-    if (result?.__localMedia) add(/audio/.test(result.mime)?'audio':/video/.test(result.mime)?'video':'image',result.url);
-    const walk = (value,key='',depth=0) => {
+    const add = (type,url,label) => { if (type && safeMediaUrl(url) && !seen.has(url)) { seen.add(url); media.push({type,url,label}); } };
+    if (result?.__binary) add(mediaType(result.mime),`data:${result.mime};base64,${result.base64}`);
+    if (result?.__localMedia) add(mediaType(result.mime),result.url);
+    if (result?.__remoteMedia && result.type==='video') add('video',result.url);
+    if(preferredKind==='视频' && task) {
+      // Task results are parsed from their confirmed output fields. Never walk
+      // input images, covers or request URLs looking for a video.
+      const paths=[...(task.mediaPaths || []),'content.video_url','data.content.video_url','output.video_url','data.output.video_url'];
+      for(const path of paths) {
+        const value=readResultPath(result,path);
+        for(const url of Array.isArray(value)?value:[value]) {
+          if(typeof url!=='string' || !safeMediaUrl(url))continue;
+          const detected=urlMediaType(url);
+          if(!detected || detected==='video')add('video',url);
+        }
+      }
+      return media.filter(item=>item.type==='video');
+    }
+    const walk = (value,key='',depth=0,context='') => {
       if (depth>14 || !value) return;
       if (typeof value === 'string') {
-        if (/^(https:\/\/|data:)/i.test(value)) {
-          if (/audio|speech|voice/.test(key) || /\.(mp3|wav|ogg|m4a)(?:\?|$)/i.test(value)) add('audio',value);
-          else if (/video/.test(key) || /\.(mp4|webm|mov)(?:\?|$)/i.test(value)) add('video',value);
-          else if (/\.(glb|gltf|obj|fbx|zip)(?:\?|$)/i.test(value)) add('file',value,'打开 3D 模型');
-          else if (/url|uri|image|file|output/.test(key) || /^data:image/.test(value)) add(/url|uri|output/.test(key) && preferredKind==='视频'?'video':/url|uri|output/.test(key) && preferredKind==='语音'?'audio':'image',value);
+        if (safeMediaUrl(value)) {
+          const detected=urlMediaType(value);
+          if(detected)add(detected,value,detected==='file'?'打开 3D 模型':undefined);
+          else if(/audio|speech|voice/.test(key) || context==='audio')add('audio',value);
+          else if(/video/.test(key) || context==='video')add('video',value);
+          else if(/^(?:url|uri|image|image_url|file|file_url|output|data|result_url)$/.test(key))add(preferredKind==='视频'?'video':preferredKind==='语音'?'audio':'image',value);
         }
         return;
       }
-      if (Array.isArray(value)) { value.forEach(v=>walk(v,key,depth+1)); return; }
+      if (Array.isArray(value)) { value.forEach(v=>walk(v,key,depth+1,context)); return; }
       if (value.b64_json) add('image',`data:image/png;base64,${value.b64_json}`);
-      if (value.inlineData?.data) add(/audio/.test(value.inlineData.mimeType)?'audio':'image',`data:${value.inlineData.mimeType};base64,${value.inlineData.data}`);
+      if (value.inlineData?.data) add(mediaType(value.inlineData.mimeType),`data:${value.inlineData.mimeType};base64,${value.inlineData.data}`);
       if (value.image_url?.url) add('image',value.image_url.url);
       if(value.audio?.data && typeof value.audio.data==='string')add('audio',`data:audio/${value.audio.format==='mp3'?'mpeg':value.audio.format || 'wav'};base64,${value.audio.data}`);
-      if(typeof value.audio==='string' && value.audio.length>100 && !/^[0-9a-f]+$/i.test(value.audio))add('audio',`data:audio/mpeg;base64,${value.audio}`);
-      if (value.audio && typeof value.audio === 'string' && /^[0-9a-f]+$/i.test(value.audio) && value.audio.length>100) {
-        const bytes = value.audio.match(/.{2}/g).map(h=>String.fromCharCode(parseInt(h,16))).join(''); add('audio',`data:audio/mpeg;base64,${btoa(bytes)}`);
+      if(typeof value.audio==='string') {
+        if(safeMediaUrl(value.audio))add('audio',value.audio);
+        else if(/^(?:[0-9a-f]{2})+$/i.test(value.audio) && value.audio.length>100) {
+          const bytes=value.audio.match(/.{2}/g).map(h=>String.fromCharCode(parseInt(h,16))).join('');add('audio',`data:audio/mpeg;base64,${btoa(bytes)}`);
+        } else if(value.audio.length>100 && /^[A-Za-z0-9+/]+={0,2}$/.test(value.audio))add('audio',`data:audio/mpeg;base64,${value.audio}`);
       }
-      Object.entries(value).forEach(([k,v])=> { if (!['b64_json','base64','data','audio'].includes(k) || typeof v !== 'string') walk(v,k,depth+1); });
-    }; walk(result); return media;
+      Object.entries(value).forEach(([k,v])=> {
+        if(/^(?:input|request|request_body|prompt|thumbnail(?:_url)?|cover(?:_url)?|poster(?:_url)?|avatar(?:_url)?)$/i.test(k))return;
+        if(['b64_json','base64','audio'].includes(k) && typeof v==='string')return;
+        walk(v,k,depth+1,/video/i.test(k)?'video':/audio|speech|voice/i.test(k)?'audio':context);
+      });
+    }; walk(result);
+    return preferredKind==='视频'?media.filter(item=>item.type==='video'):media;
   }
   function mediaError(result) {
     if(!result || typeof result!=='object')return '';
@@ -535,17 +613,19 @@
     if(result.code != null && ![0,20000000,'success','ok','accepted'].includes(result.code))return result.message || `接口返回 ${result.code}`;
     return '';
   }
-  function applyMediaResult(answer,result,model) {
-    answer.media=extractMedia(result,kind(model));
+  function applyMediaResult(answer,result,model,task=answer.task?.query) {
+    answer.media=extractMedia(result,kind(model),task);
     const parts=result.candidates?.[0]?.content?.parts || [];
-    answer.content=parts.map(p=>p.text || '').join('') || result.choices?.[0]?.message?.content || result.text || '';
+    answer.content=parts.map(p=>p.text || '').join('') || result.choices?.[0]?.message?.content || result.choices?.[0]?.message?.final_text_preview || result.text || '';
     if(typeof answer.content!=='string')answer.content='';
+    if(kind(model)==='视频' && !answer.media.length)throw new Error(result.__binary?'网关返回的文件无法识别为视频，任务已保留，请重新读取视频。':'任务已完成，但网关没有返回可播放的视频地址，请继续查询或检查雷火后台任务。');
     if(!answer.media.length && !answer.content) {
-      if(kind(model)==='视频')throw new Error('任务已完成，但网关没有返回可播放的视频地址，请继续查询或检查雷火后台任务。');
       if(kind(model)==='语音')throw new Error('模型没有返回音频或转写文本，请检查声音和参考音频是否符合要求。');
+      if(result.__binary)throw new Error('网关返回的文件类型无法识别，请复制错误信息反馈。');
       answer.content='```json\n'+JSON.stringify(result,null,2).slice(0,30000)+'\n```';
     }
     if(answer.task)answer.task.status='completed';
+    delete answer.incomplete;delete answer.playbackError;answer.error='';
     answer.rawResult=result.__binary?undefined:trimRawResult(result);
   }
   async function generateMedia(model, answer, prompt, overrides,run) {
@@ -554,43 +634,56 @@
       answer.requiresInterfaceSync=true;
       throw new Error('此模型的专用接口尚未同步，请先登录雷火用户中心同步接口。');
     }
+    if(template.task)template.task=window.LeihuoVideo?.normalizeTask?.(template.task) || template.task;
     if(template.multipart)template.multipart.fields=Object.fromEntries(Object.entries(template.body).map(([key,value])=>[key,typeof value==='string'?value:JSON.stringify(value)]));
+    answer.diagnostic={stage:'submit',method:template.method || 'POST'};
     const call = request(template.endpoint,template.body,{method:template.method,headers:template.headers,multipart:template.multipart,responseAsMedia:true,audioChunkStream:template.audioChunkStream,audioMime:template.audioMime,timeout:600000});
     let result = await awaitRequest(call,run);
-    const error=mediaError(result);if(error)throw new Error(String(error));
     if (template.task) result = await pollTask(template, result, answer, model,run);
-    applyMediaResult(answer,result,model);
+    else {const error=mediaError(result);if(error)throw new Error(String(error));}
+    applyMediaResult(answer,result,model,template.task);
   }
   function trimRawResult(result) { const json = JSON.stringify(result); return json.length<50000 ? result : undefined; }
   async function pollTask(template, result, answer, model,run) {
-    const task = template.task, readPath = (obj,path) => path.split('.').reduce((value,key)=>value?.[key],obj);
-    const taskId = (task.idPaths || ['id','task_id','data.task_id','data.id']).map(path=>readPath(result,path)).find(Boolean);
-    if (!taskId) { if(extractMedia(result,kind(model)).length)return result;throw new Error('网关未返回视频任务编号，未重复提交。'); }
+    const task = window.LeihuoVideo?.normalizeTask?.(template.task) || template.task;
+    const rawId=answer.task?.id || (task.idPaths || ['id','task_id','data.task_id','data.id']).map(path=>readResultPath(result,path)).find(value=>(typeof value==='string' && value.trim()) || (typeof value==='number' && Number.isFinite(value)));
+    const taskId=rawId==null?'':String(rawId).trim();
+    if (!taskId) { const error=mediaError(result);if(error)throw new Error(String(error));if(extractMedia(result,kind(model),task).length)return result;throw new Error('网关未返回视频任务编号，未重复提交。'); }
+    if(taskId.length>512 || /[\u0000-\u001f\u007f]/.test(taskId))throw new Error('网关返回的任务编号格式无效，未重复提交。');
+    let queryNow=!!answer.task;
     if(!answer.task)answer.task={id:taskId,model:model.id,status:'pending',baseUrl:config.baseUrl,submittedAt:Date.now(),query:task,headers:template.headers || {}};
+    else answer.task.query=task;
     persist();
     const deadline=Date.now()+20*60*1000;
     while(Date.now()<deadline) {
       ensureRun(run);
+      if(queryNow) {
+        const endpoint=substitute(task.path,{'$TASK_ID':encodeURIComponent(taskId),'$MODEL':encodeURIComponent(model.id)});
+        answer.diagnostic={stage:'query',method:task.method || 'GET'};
+        const call=request(endpoint,task.body ? substitute(task.body,{'$TASK_ID':taskId,'$MODEL':model.id}):null,{method:task.method || 'GET',headers:substitute(task.headers || template.headers || {},{'$MODEL':model.id}),timeout:Math.min(30000,Math.max(1000,deadline-Date.now()))});
+        result=await awaitRequest(call,run);queryNow=false;
+      }
+      const state=String((task.statusPaths || ['data.status','status','data.state','state']).map(path=>readResultPath(result,path)).find(Boolean) || '').trim().toLowerCase();
+      if(['failed','failure','error','canceled','cancelled','expired','rejected','unsuccessful'].includes(state)){answer.task.status='failed';const reason=(task.errorPaths || []).map(path=>readResultPath(result,path)).find(Boolean);throw new Error(typeof reason==='string'?reason:result.data?.fail_reason || result.fail_reason || result.message || '视频生成失败');}
       const error=mediaError(result);if(error)throw new Error(String(error));
-      const state=String((task.statusPaths || ['data.status','status','data.state','state']).map(path=>readPath(result,path)).find(Boolean) || '').toLowerCase();
-      if(/fail|error|cancel/.test(state)){answer.task.status='failed';const reason=(task.errorPaths || []).map(path=>readPath(result,path)).find(Boolean);throw new Error(typeof reason==='string'?reason:result.data?.fail_reason || result.fail_reason || result.message || '视频生成失败');}
-      if(/succeed|success|completed|done|finish/.test(state) || (!state && extractMedia(result,kind(model)).length)){
+      const ready=extractMedia(result,kind(model),task).length>0;
+      if(['succeed','succeeded','success','successful','completed','done','finish','finished'].includes(state) || (!state && ready)){
         answer.content='';
-        if(!extractMedia(result,kind(model)).length && task.contentPath){
+        if(!ready && task.contentPath){
           const endpoint=substitute(task.contentPath,{'$TASK_ID':encodeURIComponent(taskId),'$MODEL':encodeURIComponent(model.id)});
+          answer.diagnostic={stage:'content',method:'GET'};
           result=await awaitRequest(request(endpoint,null,{responseAsMedia:true,headers:template.headers,timeout:120000}),run);
+          const contentError=mediaError(result);if(contentError)throw new Error(String(contentError));
         }
         return result;
       }
-      const progress=readPath(result,'data.progress') ?? result.progress;
+      const progress=readResultPath(result,'data.progress') ?? result.progress;
       answer.task.status='pending';answer.task.progress=progress;
       answer.content=/queued|submitted|not_start|pending/.test(state)?'视频已提交，正在排队…':`正在生成视频${progress?`（${String(progress).replace(/%$/,'')}%）`:'，请稍候…'}`;
       scheduleRender();
       await new Promise((resolve,reject)=> { const id=uuid(); if(activeRun===run)activeRequest=id;const timer=setTimeout(()=>{pending.delete(id);resolve();},5000);pending.set(id,{resolve,reject,timer}); });
       ensureRun(run);
-      const endpoint = task.path.replace('$TASK_ID',encodeURIComponent(taskId)).replace('$MODEL',encodeURIComponent(model.id));
-      const call = request(endpoint,task.body ? substitute(task.body,{'$TASK_ID':taskId,'$MODEL':model.id}):null,{method:task.method || 'GET',headers:substitute(task.headers || template.headers || {},{'$MODEL':model.id}),timeout:Math.min(30000,Math.max(1000,deadline-Date.now()))});
-      result=await awaitRequest(call,run);
+      queryNow=true;
     }
     throw new Error('视频仍在处理中，任务编号已保存，可以点击“继续查询视频”。');
   }
@@ -608,27 +701,28 @@
   }
   async function runGeneration(model,prompt,overrides) {
     const chat = activeChat, answer={id:uuid(),role:'assistant',content:'',reasoning:'',media:[],model:model.id,streaming:true,createdAt:Date.now()}; chat.messages.push(answer); forceScroll=true;
-    const run={chat,answer,canceled:false};activeRun=run;
+    const run={chat,answer,canceled:false};activeRun=run;answer.diagnostic={stage:kind(model)==='聊天'?'chat':'submit',method:'POST'};
     persist(); renderMessages();
     try { if (kind(model)==='聊天' && !overrides) await generateChat(model,answer,run); else await generateMedia(model,answer,prompt,overrides,run); }
-    catch (error) { if(error.canceled)answer.incomplete=true;if(answer.task && answer.task.status!=='failed')answer.task.status='paused';if(!error.canceled)answer.error=error.message;if(answer.task)answer.content=error.canceled?'已停止等待，任务编号已保存。':answer.task.status==='failed'?'视频生成失败。':'任务编号已保存，可以继续查询。';else if(error.canceled && !answer.content && !answer.media.length)answer.content=kind(model)==='视频'?'已停止等待视频结果。':'已停止生成。'; }
+    catch (error) { recordGenerationError(answer,error);if(error.canceled)answer.incomplete=true;if(answer.task && answer.task.status!=='failed')answer.task.status='paused';if(!error.canceled)answer.error=error.message;if(answer.task)answer.content=error.canceled?'已停止等待，任务编号已保存。':answer.task.status==='failed'?'视频生成失败。':'任务编号已保存，可以继续查询。';else if(error.canceled && !answer.content && !answer.media.length)answer.content=kind(model)==='视频'?'已停止等待视频结果。':'已停止生成。'; }
     finally { answer.streaming=false; if(activeRun===run){activeRun=null;activeRequest=null;}chat.updatedAt=Date.now();persist();if(activeChat===chat)renderMessages();resizeComposer(); }
   }
   function stopGeneration() { if(activeRun)activeRun.canceled=true;const id=activeRequest;activeRun=null;activeRequest=null;if(id)cancelRequest(id);resizeComposer(); }
   async function resumeTask(index) {
     if (waitForImages()) return;
     if(activeRun || activeRequest || !activeChat)return;
-    const answer=activeChat.messages[Number(index)],saved=answer?.task;if(!saved)return;
+    const answer=activeChat.messages[Number(index)],saved=answer?.task;if(!saved?.query?.path)return;
+    if(String(saved.query.method || 'GET').toUpperCase()!=='GET'){toast('这个任务缺少已确认的读取接口，请同步雷火接口。',true);return;}
     if(saved.baseUrl && saved.baseUrl!==config.baseUrl){toast('请切回提交此任务时使用的雷火地址。',true);return;}
     const model=models.find(m=>m.id===saved.model) || {id:saved.model,supported_endpoint_types:['openai-video-gen']};
-    const chat=activeChat,run={chat,answer,canceled:false};activeRun=run;answer.streaming=true;answer.error='';renderMessages();resizeComposer();
+    const chat=activeChat,run={chat,answer,canceled:false};activeRun=run;answer.streaming=true;answer.error='';delete answer.playbackError;renderMessages();resizeComposer();
     try{const result=await pollTask({task:saved.query,headers:saved.headers},{task_id:saved.id,status:'pending'},answer,model,run);applyMediaResult(answer,result,model);}
-    catch(error){if(saved.status!=='failed')saved.status='paused';answer.content=error.canceled?'已停止等待，任务编号已保存。':'任务编号已保存，可以继续查询。';if(!error.canceled)answer.error=error.message;}
+    catch(error){recordGenerationError(answer,error);if(error.canceled)answer.incomplete=true;if(saved.status!=='failed')saved.status='paused';answer.content=error.canceled?'已停止等待，任务编号已保存。':saved.status==='failed'?'视频生成失败。':'任务编号已保存，可以继续查询。';if(!error.canceled)answer.error=error.message;}
     finally{answer.streaming=false;if(activeRun===run){activeRun=null;activeRequest=null;}chat.updatedAt=Date.now();persist();if(activeChat===chat)renderMessages();resizeComposer();}
   }
   async function regenerate(index) {
     if (waitForImages()) return;
-    if (activeRequest) return; if (!activeChat) return;
+    if (activeRequest || activeRun) return; if (!activeChat) return;
     const answer=activeChat.messages[Number(index)];if(answer?.task && !['completed','failed'].includes(answer.task.status)){await resumeTask(index);return;}
     if(kind(selectedModel())==='视频' && !await confirmAction('重新生成视频？','这会向雷火提交一个新的生成任务。'))return;
     activeChat.messages = activeChat.messages.slice(0,Number(index));
@@ -763,10 +857,22 @@
     $('imageGenerationButton').onclick=openImages;$('genericToolButton').onclick=()=>openTool();
     $('toolRequestForm').onsubmit=runTool;
     $('imageModelInput').onchange=updateImageOptions;
-    $('imageForm').onsubmit=async e=>{e.preventDefault();if(waitForImages())return;const id=$('imageModelInput').value,prompt=$('imagePromptInput').value.trim();if(!prompt){toast('请描述你想生成的图片。');return;}if(activeRequest){toast('请先停止当前生成。');return;}pickModel(id);$('messageInput').value=prompt;const model=selectedModel(),template=mediaTemplate(model,prompt,attachments.filter(file=>file.type==='image'));if(template?.body?.size)template.body.size=$('imageSizeSelect').value;await sendMessage(null,template);};
+    $('imageForm').onsubmit=async e=>{
+      e.preventDefault();if(waitForImages())return;
+      const id=$('imageModelInput').value,prompt=$('imagePromptInput').value.trim();
+      if(!prompt){toast('请描述你想生成的图片。');return;}if(activeRequest || activeRun){toast('请先停止当前生成。');return;}
+      pickModel(id);$('messageInput').value=prompt;
+      try {
+        const template=mediaTemplate(selectedModel(),prompt,attachments);
+        if(template?.body && /^\/v1\/images\/(?:generations|edits)$/.test(template.endpoint))template.body.size=$('imageSizeSelect').value;
+        await sendMessage(null,template);
+      } catch(error){toast(error.message,true);}
+    };
     $('voiceButton').onclick=()=>{if(native?.speech){$('voiceButton').classList.add('recording');native.speech();}else toast('请使用手机键盘的语音输入。');};
     $('messages').onclick=async e=>{
       const resumeButton=e.target.closest('[data-resume-task]');if(resumeButton){resumeTask(resumeButton.dataset.resumeTask);return;}
+      const diagnosticButton=e.target.closest('[data-copy-diagnostic]');if(diagnosticButton){copyDiagnostic(activeChat.messages[Number(diagnosticButton.dataset.copyDiagnostic)]);return;}
+      const reloadButton=e.target.closest('[data-reload-media]');if(reloadButton){reloadButton.closest('article').querySelectorAll('audio,video').forEach(player=>player.load());return;}
       if(e.target.closest('[data-sync-interfaces]')){syncInterfaces();return;}
       const copyButton=e.target.closest('[data-copy-message]');if(copyButton){copy(activeChat.messages[Number(copyButton.dataset.copyMessage)].content);return;}
       const editButton=e.target.closest('[data-edit-message]');if(editButton){if(waitForImages())return;if(activeRequest){toast('请先停止当前生成。');return;}const index=Number(editButton.dataset.editMessage),message=activeChat.messages[index];$('messageInput').value=message.content;attachments=message.attachments?.slice() || [];activeChat.messages=activeChat.messages.slice(0,index);persist();renderMessages();renderAttachments();$('messageInput').focus();return;}
@@ -774,6 +880,8 @@
       const readButton=e.target.closest('[data-read-message]');if(readButton){const text=activeChat.messages[Number(readButton.dataset.readMessage)].content;if(native?.speak)native.speak(text);else if(window.speechSynthesis){speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text));}else toast('此手机暂不支持朗读。');return;}
       const mediaButton=e.target.closest('[data-open-media]');if(mediaButton){if(native?.saveMedia)native.saveMedia(mediaButton.dataset.openMedia);else openExternal(mediaButton.dataset.openMedia);}
     };
+    $('messages').addEventListener('error',mediaPlaybackEvent,true);
+    $('messages').addEventListener('loadedmetadata',mediaPlaybackEvent,true);
     document.addEventListener('click',e=>{const link=e.target.closest('a[href]');if(link){const href=link.getAttribute('href');if(/^https?:\/\//i.test(href)){e.preventDefault();openExternal(href);}else if(!href.startsWith('#'))e.preventDefault();}const suggestion=e.target.closest('[data-prompt]');if(suggestion){$('messageInput').value=suggestion.dataset.prompt;resizeComposer();$('messageInput').focus();}const action=e.target.closest('[data-action="generate-image"]');if(action)openImages();if(e.target.closest('[data-action="image"],[data-action="attach-image"]'))pickImages();});
     $('messageViewport').onscroll=()=>{const el=$('messageViewport');forceScroll=el.scrollHeight-el.scrollTop-el.clientHeight<120;$('scrollBottomButton').hidden=forceScroll || !activeChat;};
     $('scrollBottomButton').onclick=()=>{forceScroll=true;$('messageViewport').scrollTo({top:$('messageViewport').scrollHeight,behavior:'smooth'});};
