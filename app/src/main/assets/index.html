@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" id="themeColor">
+  <title>雷火</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="vendor/marked.min.js"></script>
+  <script defer src="vendor/purify.min.js"></script>
+  <script defer src="vendor/highlight.min.js"></script>
+  <script defer src="vendor/pdf.min.js"></script>
+  <script defer src="vendor/mammoth.browser.min.js"></script>
+  <script defer src="audio-profiles.js"></script>
+  <script defer src="video-profiles.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 8h16M4 16h11"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-compose" viewBox="0 0 24 24"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M14.5 4.5l5 5M11 13l-1 4 4-1 7-7a2.12 2.12 0 0 0-3-3Z"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="icon-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14m-6-6 6 6 6-6"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="icon-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></symbol>
+    <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-3 0h6"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m9.5 3-.8 2.5-2.4 1-2.4-.6-2.2 3.8 1.7 1.9v2.8l-1.7 1.9 2.2 3.8 2.4-.6 2.4 1 .8 2.5h4.4l.8-2.5 2.4-1 2.4.6 2.2-3.8-1.7-1.9v-2.8l1.7-1.9-2.2-3.8-2.4.6-2.4-1L14.5 3Z" transform="translate(0 -1) scale(1 .96)"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m4 17 5-5 4 4 3-3 5 5"/></symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 14h8m-8 3h5"/></symbol>
+    <symbol id="icon-sparkles" viewBox="0 0 24 24"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6ZM20 3v4m-2-2h4"/></symbol>
+    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.7 7a7.5 7.5 0 0 1 12.7-1.3L20 8M4 16l1.6 2.3A7.5 7.5 0 0 0 18.3 17"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="icon-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l1-5L17 3a2.12 2.12 0 0 1 3 3L8 18ZM4 20h16"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 15V3m-5 5 5-5 5 5M4 16v5h16v-5"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="icon-lightning" viewBox="0 0 24 24"><path d="m13.5 2-9 12h6l-1 8 10-13h-7Z"/></symbol>
+    <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  </svg>
+
+  <div id="app" class="app-shell">
+    <header class="app-header">
+      <button id="menuButton" class="icon-button header-action" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#icon-menu"/></svg></button>
+      <button id="modelButton" class="model-selector" type="button" aria-label="选择模型" aria-haspopup="dialog"><span id="currentModelName">雷火</span><svg class="icon chevron"><use href="#icon-chevron"/></svg></button>
+      <button id="newChatTopButton" class="icon-button header-action" type="button" aria-label="新建对话"><svg class="icon"><use href="#icon-compose"/></svg></button>
+    </header>
+
+    <main id="messageViewport" class="message-viewport" aria-label="对话">
+      <div id="emptyState" class="empty-state">
+        <h1>有什么可以帮忙的？</h1>
+        <div id="suggestions" class="suggestions" aria-label="开始对话"><button type="button" data-prompt="帮我写一段文案"><svg class="icon"><use href="#icon-compose"/></svg>写一段文案</button><button type="button" data-prompt="请帮我分析这张图片。" data-action="image"><svg class="icon"><use href="#icon-image"/></svg>分析一张图片</button><button type="button" data-action="generate-image"><svg class="icon"><use href="#icon-sparkles"/></svg>生成一张图片</button></div>
+      </div>
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+    </main>
+
+    <div class="composer-area">
+      <button id="scrollBottomButton" class="scroll-bottom icon-button" type="button" aria-label="滚动到最新消息" hidden><svg class="icon"><use href="#icon-arrow-down"/></svg></button>
+      <div id="connectionBanner" class="connection-banner" hidden><span id="connectionBannerText">连接雷火，开始对话</span><button id="connectionSettingsButton" type="button">设置</button></div>
+      <form id="composerForm" class="composer" autocomplete="off">
+        <div id="attachmentPreview" class="attachment-preview" aria-label="附件" hidden></div>
+        <label class="sr-only" for="messageInput">消息</label>
+        <textarea id="messageInput" class="message-input" rows="1" placeholder="询问任何问题" enterkeyhint="enter" spellcheck="false"></textarea>
+        <div class="composer-toolbar">
+          <button id="addAttachmentButton" class="icon-button add-attachment" type="button" aria-label="添加附件或使用工具" aria-haspopup="dialog"><svg class="icon"><use href="#icon-plus"/></svg></button>
+          <button id="composerModelBadge" class="composer-model-badge" type="button" hidden></button>
+          <div class="composer-actions">
+            <span id="inputHint" class="input-hint" hidden></span>
+            <button id="voiceButton" class="icon-button voice-button" type="button" aria-label="语音输入"><svg class="icon"><use href="#icon-wave"/></svg></button>
+            <button id="sendButton" class="icon-button send-button" type="submit" aria-label="发送消息" hidden><svg class="icon"><use href="#icon-arrow-up"/></svg></button>
+            <button id="stopButton" class="icon-button send-button" type="button" aria-label="停止生成" hidden><svg class="icon icon-stop"><use href="#icon-stop"/></svg></button>
+          </div>
+        </div>
+      </form>
+      <div class="composer-footnote" id="composerFootnote">AI 的回答可能有误，请核实重要信息。</div>
+    </div>
+  </div>
+
+  <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+  <aside id="sidebar" class="sidebar" aria-label="历史对话" aria-hidden="true">
+    <div class="sidebar-top">
+      <div class="brand"><span class="brand-mark"><svg class="icon"><use href="#icon-lightning"/></svg></span><span>雷火</span></div>
+      <button id="closeSidebarButton" class="icon-button" type="button" aria-label="关闭侧栏"><svg class="icon"><use href="#icon-close"/></svg></button>
+    </div>
+    <div class="search-box sidebar-search"><svg class="icon"><use href="#icon-search"/></svg><input id="historySearch" type="search" placeholder="搜索对话" aria-label="搜索历史对话" autocomplete="off"></div>
+    <button id="newChatButton" class="sidebar-new-chat" type="button"><svg class="icon"><use href="#icon-compose"/></svg><span>新对话</span></button>
+    <div id="historyList" class="history-list" aria-label="历史对话列表"></div>
+    <div class="sidebar-footer">
+      <button id="settingsButton" class="account-button" type="button" aria-label="打开设置"><span class="account-avatar">雷</span><span class="account-copy"><strong>雷火</strong><span>设置与偏好</span></span><svg class="icon"><use href="#icon-settings"/></svg></button>
+    </div>
+  </aside>
+
+  <div id="sheetBackdrop" class="sheet-backdrop" hidden></div>
+
+  <section id="modelSheet" class="sheet model-sheet" role="dialog" aria-modal="true" aria-labelledby="modelSheetTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="modelSheetTitle">切换模型</h2><p id="modelCount">雷火的全部可用模型</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭模型选择"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="model-search-row"><div class="search-box"><svg class="icon"><use href="#icon-search"/></svg><input id="modelSearch" type="search" placeholder="搜索模型" aria-label="搜索模型名称" autocomplete="off"></div><button id="refreshModelsButton" class="icon-button refresh-models" type="button" aria-label="刷新模型列表"><svg class="icon"><use href="#icon-refresh"/></svg></button></div>
+    <div id="modelCategories" class="model-categories" aria-label="模型类别"></div>
+    <div id="modelList" class="model-list sheet-scroll" aria-label="可用模型"></div>
+  </section>
+
+  <section id="settingsSheet" class="sheet settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="settingsSheetTitle">设置</h2><p>连接你的雷火账户</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭设置"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="sheet-scroll settings-content">
+      <form id="settingsForm" autocomplete="off">
+        <section class="settings-section"><h3>雷火连接</h3>
+          <div class="form-field"><label for="baseUrlInput">API 地址</label><input id="baseUrlInput" type="url" placeholder="https://ai.leihuo.netease.com" autocapitalize="off" spellcheck="false"><p class="field-hint">填写雷火的 API 地址。</p></div>
+          <div class="form-field"><label for="apiKeyInput">API Key</label><div class="input-with-action"><input id="apiKeyInput" type="password" placeholder="输入你的 API Key" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="keyVisibilityButton" class="icon-button" type="button" aria-label="显示密钥"><svg class="icon"><use href="#icon-eye"/></svg></button></div><p class="field-hint">密钥仅保存在这台设备上。</p></div>
+          <div class="connection-row"><span id="connectionStatus" class="connection-status">尚未连接</span><button id="settingsRefreshButton" class="text-button" type="button"><svg class="icon"><use href="#icon-refresh"/></svg>刷新模型</button></div>
+          <button id="syncInterfacesButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-refresh"/></svg><span>登录雷火并同步更多接口</span></button><p id="interfaceSyncStatus" class="field-hint">使用雷火官方用户中心同步专用接口，登录信息只留在官方页面。</p>
+        </section>
+        <section class="settings-section"><h3>个性化</h3>
+          <div class="form-field setting-inline"><label for="themeSelect">外观</label><select id="themeSelect"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
+          <div class="form-field"><label for="systemPromptInput">自定义指令</label><textarea id="systemPromptInput" rows="4" placeholder="你希望 AI 如何回答？"></textarea><p class="field-hint">这些指令会用于每次对话。</p></div>
+        </section>
+        <button id="saveSettingsButton" class="primary-button" type="submit">保存设置</button>
+      </form>
+      <section class="settings-section data-section"><h3>对话数据</h3><p id="storageInfo" class="field-hint">对话保存在这台设备上。</p>
+        <button id="exportButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-download"/></svg><span>导出对话</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
+        <button id="importButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-upload"/></svg><span>导入对话</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
+        <button id="clearHistoryButton" class="settings-action danger" type="button"><svg class="icon"><use href="#icon-trash"/></svg><span>清空所有对话</span></button>
+      </section>
+      <p class="app-version">雷火 <span id="appVersion">1.1.0</span></p>
+    </div>
+  </section>
+
+  <section id="toolsSheet" class="sheet tools-sheet" role="dialog" aria-modal="true" aria-labelledby="toolsSheetTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><h2 id="toolsSheetTitle">添加到对话</h2><button class="icon-button" type="button" data-close-sheet aria-label="关闭工具"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="tool-quick-actions"><button id="imageAttachButton" type="button"><span class="tool-icon"><svg class="icon"><use href="#icon-image"/></svg></span><span>照片</span></button><button id="fileAttachButton" type="button"><span class="tool-icon"><svg class="icon"><use href="#icon-file"/></svg></span><span>文件</span></button></div>
+    <div class="tool-list"><button id="imageGenerationButton" class="tool-row" type="button"><svg class="icon"><use href="#icon-sparkles"/></svg><span><strong>生成图片</strong><small>把你的想法变成画面</small></span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button><button id="genericToolButton" class="tool-row" type="button"><svg class="icon"><use href="#icon-grid"/></svg><span><strong>更多模型工具</strong><small>语音、视频、嵌入与其他能力</small></span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button></div>
+  </section>
+
+  <section id="imageSheet" class="sheet image-sheet" role="dialog" aria-modal="true" aria-labelledby="imageSheetTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="imageSheetTitle">生成图片</h2><p>描述你脑海中的画面</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭图片生成"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="sheet-scroll tool-form-content">
+      <form id="imageForm">
+        <div class="form-field"><label for="imageModelInput">图片模型</label><select id="imageModelInput" aria-label="选择图片模型"></select></div>
+        <div class="form-field"><label for="imagePromptInput">画面描述</label><textarea id="imagePromptInput" rows="5" placeholder="例如：一只橘猫坐在阳光洒落的窗边，胶片摄影风格"></textarea></div>
+        <div class="form-field setting-inline"><label for="imageSizeSelect">尺寸</label><select id="imageSizeSelect"><option value="1024x1024">正方形 · 1024 × 1024</option><option value="2048x2048">2K 正方形 · 2048 × 2048</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></div>
+        <button id="imageGenerateButton" class="primary-button" type="submit"><svg class="icon"><use href="#icon-sparkles"/></svg>生成图片</button>
+      </form>
+      <div id="imageResult" class="image-result" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="mediaSettingsSheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="mediaSettingsTitle" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="mediaSettingsTitle">媒体设置</h2><p id="mediaSettingsDescription">设置声音与视频效果</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭媒体设置"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="sheet-scroll tool-form-content"><form id="mediaSettingsForm"><div id="mediaSettingsFields"></div><button id="audioSampleButton" class="settings-action" type="button" hidden><svg class="icon"><use href="#icon-upload"/></svg><span>添加参考音频</span></button><button class="primary-button" type="submit">保存</button></form></div>
+  </section>
+
+  <section id="toolRequestSheet" class="sheet tool-request-sheet" role="dialog" aria-modal="true" aria-labelledby="toolTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="toolTitle">模型工具</h2><p>使用模型支持的其他能力</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭模型工具"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="sheet-scroll tool-form-content">
+      <form id="toolRequestForm">
+        <div class="form-field"><label for="toolEndpointInput">接口</label><input id="toolEndpointInput" type="text" placeholder="POST /v1/images/generations" autocapitalize="off" spellcheck="false"><p class="field-hint">填写请求方法与路径，例如 GET /v1/models。</p></div>
+        <div class="form-field"><label for="toolModelInput">模型</label><input id="toolModelInput" type="text" placeholder="输入模型名称" autocapitalize="off" spellcheck="false"></div>
+        <div class="form-field"><label for="toolBodyInput">请求参数 <span class="label-note">JSON</span></label><textarea id="toolBodyInput" class="code-input" rows="7" placeholder='{"input": "你好"}' autocapitalize="off" spellcheck="false"></textarea><p class="field-hint">参数需符合所选模型与接口的要求。</p></div>
+        <div id="toolFileField" class="form-field" hidden><label for="toolFileInput">附件（可选）</label><input id="toolFileInput" type="file" accept="audio/*,image/*"><p class="field-hint">用于语音转录或图片编辑，最大 15 MB。</p></div>
+        <button id="toolRunButton" class="primary-button" type="submit">运行</button>
+      </form>
+      <div id="toolResult" class="tool-result" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <dialog id="confirmDialog" class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage"><h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p><div class="confirm-actions"><button id="confirmCancelButton" class="secondary-button" type="button">取消</button><button id="confirmOkButton" class="primary-button" type="button">确认</button></div></dialog>
+  <div id="toastContainer" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+  <input id="imageInput" type="file" accept="image/*" multiple hidden>
+  <input id="fileInput" type="file" accept=".txt,.md,.json,.csv,.log,.html,.xml,.yaml,.yml,.py,.js,.ts,.css,.java,.c,.cpp,.h,.sql,.pdf,.docx,.wav,.mp3,.m4a,.aac,.flac,.ogg,audio/*,image/*" multiple hidden>
+  <input id="audioInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg" hidden>
+  <input id="importInput" type="file" accept="application/json,.json" hidden>
+</body>
+</html>

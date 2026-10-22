@@ -1,0 +1,11 @@
+/.gradle/
+/build/
+/app/build/
+/local.properties
+/dist/*.apk
+/dist/*.sha256
+/.private/
+*.jks
+*.keystore
+*.log
+/node_modules/

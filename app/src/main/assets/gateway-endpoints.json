@@ -1,0 +1,109 @@
+{
+  "openai-image-generation": {
+    "type": "openai-image-generation",
+    "path": "/v1/images/generations",
+    "method": "POST",
+    "body": {"model": "$MODEL", "prompt": "$PROMPT", "n": 1},
+    "primary": true
+  },
+  "image-generation": {
+    "type": "image-generation",
+    "path": "/v1/images/generations",
+    "method": "POST",
+    "body": {"model": "$MODEL", "prompt": "$PROMPT", "n": 1},
+    "primary": true
+  },
+  "openai-embedding": {
+    "type": "openai-embedding",
+    "path": "/v1/embeddings",
+    "method": "POST",
+    "body": {"model": "$MODEL", "input": "$PROMPT"},
+    "primary": true
+  },
+  "openai-video": {
+    "type": "openai-video",
+    "path": "/v1/video/generations",
+    "method": "POST",
+    "body": {"model": "$MODEL", "prompt": "$PROMPT"},
+    "task": {
+      "path": "/v1/video/generations/$TASK_ID",
+      "method": "GET",
+      "idPaths": ["task_id", "id", "data.task_id", "data.id"],
+      "statusPaths": ["status", "data.status"]
+    },
+    "primary": true
+  },
+  "openai-video-gen": {
+    "type": "openai-video-gen",
+    "path": "/v1/video/generations",
+    "method": "POST",
+    "body": {"model": "$MODEL", "prompt": "$PROMPT", "duration": 8, "metadata": {"aspectRatio": "16:9", "resolution": "720p", "generateAudio": true}},
+    "task": {
+      "path": "/v1/video/generations/$TASK_ID",
+      "method": "GET",
+      "idPaths": ["task_id", "id", "data.task_id", "data.id"],
+      "statusPaths": ["data.status", "status", "data.state", "state"]
+    },
+    "primary": true
+  },
+  "openai": {
+    "type": "openai",
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "body": {"model": "$MODEL", "messages": [{"role": "user", "content": "$PROMPT"}], "stream": false},
+    "primary": false
+  },
+  "openai-response": {
+    "type": "openai-response",
+    "path": "/v1/responses",
+    "method": "POST",
+    "body": {"model": "$MODEL", "input": "$PROMPT", "stream": false},
+    "primary": false
+  },
+  "anthropic": {
+    "type": "anthropic",
+    "path": "/v1/messages",
+    "method": "POST",
+    "headers": {"anthropic-version": "2023-06-01"},
+    "body": {"model": "$MODEL", "messages": [{"role": "user", "content": "$PROMPT"}], "max_tokens": 4096, "stream": false},
+    "primary": false
+  },
+  "gemini": {
+    "type": "gemini",
+    "path": "/v1beta/models/$MODEL:generateContent",
+    "method": "POST",
+    "body": {"contents": [{"role": "user", "parts": [{"text": "$PROMPT"}]}]},
+    "primary": false
+  },
+  "__unknown": {
+    "types": [
+      "seedance", "hunyuan-submit", "hunyuan-fetch",
+      "tripo-generation", "tripo-task", "tripo-upload", "tripo-edit",
+      "typesafe-system-one", "voice-generation", "openspeech_create", "openspeech_unidirectional",
+      "minimax-t2a_v2", "minimax-get_voice", "minimax-delete_voice", "minimax-files_upload", "minimax-voice_clone",
+      "create", "query", "query_by_task_id", "delete", "video_regeneration", "h3_context_ir"
+    ],
+    "emptyEndpointModels": ["codex-auto-review", "danqingyue", "deepseek-v4-flash", "gpt-5.6-luna", "gpt-6-sol", "tripo-default"],
+    "multipartEndpoints": [
+      {"type": "openai-image-edit-endpoint", "path": "/v1/images/edits", "method": "POST", "requiredFields": ["model", "prompt", "image"], "reason": "Requires a multipart image upload; not a JSON generation template."}
+    ],
+    "note": "These proprietary endpoint paths have not been confirmed. Use user supplied endpoint and request parameters; do not automatically route them to chat.",
+    "documentation": "docs/gateway-api.md"
+  },
+  "__meta": {
+    "researchedAt": "2026-10-21",
+    "basis": "New API public router, default endpoint map, DTOs and Alibaba image plugin source; current Leihuo model catalog.",
+    "generationRequestsPerformed": false,
+    "perModelCompatibilityVerified": false,
+    "geminiImageSelection": "For image models declaring gemini, prefer Gemini generateContent with responseModalities TEXT and IMAGE before image-generation.",
+    "pathSubstitution": "Replace $MODEL in paths with the URI encoded selected model ID.",
+    "sources": [
+      "https://github.com/QuantumNous/new-api/blob/main/common/endpoint_defaults.go",
+      "https://github.com/QuantumNous/new-api/blob/main/router/relay-router.go",
+      "https://github.com/QuantumNous/new-api/blob/main/router/video-router.go",
+      "https://github.com/QuantumNous/new-api/blob/main/dto/video.go",
+      "https://github.com/QuantumNous/new-api/blob/main/relaykit/dto/openai_video.go",
+      "https://github.com/QuantumNous/new-api/blob/main/plugins/tasks/alibaba/plugin.js"
+    ]
+  }
+}
