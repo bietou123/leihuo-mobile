@@ -80,11 +80,13 @@ public final class MainActivity extends Activity {
     private FrameLayout frame;
     private ConfigStore config;
     private ChatStore chats;
+    private MemoryStore memory;
     private SharedPreferences interfacePrefs;
     private final ExecutorService requests = Executors.newFixedThreadPool(4);
     private final Map<String, RequestTask> active = new ConcurrentHashMap<>();
     private ValueCallback<Uri[]> fileCallback;
     private String pendingExport;
+    private String pendingExportTitle;
     private File pendingMedia;
     private boolean mediaBusy;
     private boolean imagePickActive;
@@ -103,6 +105,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         config = new ConfigStore(this);
         chats = new ChatStore(this);
+        memory = new MemoryStore(this);
         interfacePrefs = getSharedPreferences("interfaces", MODE_PRIVATE);
         frame = new FrameLayout(this);
         frame.setBackgroundColor(Color.WHITE);
@@ -1076,6 +1079,25 @@ public final class MainActivity extends Activity {
     private final class NativeBridge {
         @JavascriptInterface public String loadChats() { return chats.load(); }
 
+        @JavascriptInterface public String loadMemory() {
+            try { return sanitizeMemoryJson(memory.load()); }
+            catch (Exception failure) { return MemoryStore.emptyWithError("综合记忆无法安全读取，请重新填写网关密钥后重试"); }
+            catch (OutOfMemoryError exhausted) { return MemoryStore.RESOURCE_LOAD_ERROR_JSON; }
+        }
+
+        @JavascriptInterface public String saveMemory(String json) {
+            try { return memory.save(sanitizeMemoryJson(json)); }
+            catch (IllegalArgumentException invalid) { return MemoryStore.error(invalid.getMessage()); }
+            catch (Exception failure) { return MemoryStore.error("无法读取网关密钥，综合记忆未保存，请重新填写密钥后重试"); }
+            catch (OutOfMemoryError exhausted) { return MemoryStore.RESOURCE_ERROR_JSON; }
+        }
+
+        @JavascriptInterface public String sanitizeMemoryText(String text) {
+            try { return redact(text == null ? "" : text, config.apiKey()); }
+            catch (Exception failure) { return "[综合记忆无法安全读取，请重新填写网关密钥]"; }
+            catch (OutOfMemoryError exhausted) { return "[综合记忆处理超出可用内存，请整理记忆后重试]"; }
+        }
+
         @JavascriptInterface public void pickImages() { runOnUiThread(() -> MainActivity.this.pickImages()); }
 
         @JavascriptInterface public String takePickedImages() { return MainActivity.this.takePickedImages(); }
@@ -1167,15 +1189,20 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void stopSpeech() { runOnUiThread(() -> { if (textToSpeech != null) textToSpeech.stop(); }); }
 
         @JavascriptInterface public void exportChats(String json) {
-            runOnUiThread(() -> {
-                try {
-                    new JSONObject(json);
-                    pendingExport = json;
-                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
-                    intent.putExtra(Intent.EXTRA_TITLE, "雷火聊天记录.json");
-                    startActivityForResult(intent, EXPORT_CHATS);
-                } catch (Exception failure) { emit("export", "error", "无法导出聊天记录", 0, null); }
-            });
+            try {
+                new JSONObject(json);
+                beginJsonExport(json, "雷火聊天记录.json");
+            } catch (Exception failure) { emit("export", "error", "无法导出聊天记录", 0, null); }
+        }
+
+        @JavascriptInterface public void exportMemory(String json) {
+            try {
+                beginJsonExport(sanitizeMemoryJson(json), "雷火综合记忆.json");
+            } catch (Exception failure) {
+                emit("export", "error", failure instanceof IllegalArgumentException ? failure.getMessage() : "无法安全导出综合记忆，请重新填写网关密钥后重试", 0, null);
+            } catch (OutOfMemoryError exhausted) {
+                emitExportResourceError();
+            }
         }
 
         @JavascriptInterface public void importChats() {
@@ -1187,6 +1214,76 @@ public final class MainActivity extends Activity {
                 } catch (Exception failure) { emit("import", "error", "无法打开文件选择器", 0, null); }
             });
         }
+    }
+
+    private String sanitizeMemoryJson(String json) throws Exception {
+        String validated = MemoryStore.validatedJson(json);
+        String key = config.apiKey();
+        if (key.isEmpty()) return validated;
+        JSONObject sanitized = (JSONObject) redactMemoryValue(new JSONObject(validated), key);
+        return MemoryStore.validatedJson(sanitized.toString());
+    }
+
+    private static Object redactMemoryValue(Object value, String key) throws Exception {
+        if (value instanceof String) return redact((String) value, key);
+        if (value instanceof JSONArray) {
+            JSONArray sanitized = new JSONArray();
+            JSONArray original = (JSONArray) value;
+            for (int index = 0; index < original.length(); index++) {
+                sanitized.put(redactMemoryValue(original.get(index), key));
+            }
+            return sanitized;
+        }
+        if (value instanceof JSONObject) {
+            JSONObject sanitized = new JSONObject();
+            JSONObject original = (JSONObject) value;
+            Iterator<String> keys = original.keys();
+            while (keys.hasNext()) {
+                String name = keys.next();
+                String safeName = redact(name, key);
+                if (sanitized.has(safeName)) throw new IllegalArgumentException("综合记忆脱敏后存在重复字段，请整理后重试");
+                sanitized.put(safeName, redactMemoryValue(original.get(name), key));
+            }
+            return sanitized;
+        }
+        return value;
+    }
+
+    private void beginJsonExport(String json, String title) {
+        runOnUiThread(() -> {
+            if (pendingExport != null) {
+                emit("export", "error", "已有导出正在进行，请先完成或取消", 0, null);
+                return;
+            }
+            try {
+                pendingExport = json;
+                pendingExportTitle = title;
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
+                intent.putExtra(Intent.EXTRA_TITLE, title);
+                startActivityForResult(intent, EXPORT_CHATS);
+            } catch (Exception failure) {
+                pendingExport = null;
+                pendingExportTitle = null;
+                emit("export", "error", "无法打开导出文件选择器", 0, null);
+            } catch (OutOfMemoryError exhausted) {
+                pendingExport = null;
+                pendingExportTitle = null;
+                emitExportResourceError();
+            }
+        });
+    }
+
+    private void emitExportResourceError() {
+        // A fixed script avoids allocating another JSON tree under memory pressure.
+        final String script = "window.__nativeEvent && window.__nativeEvent({\"id\":\"export\",\"type\":\"error\",\"data\":\"导出超出可用内存，请先整理数据后重试\"});";
+        try {
+            runOnUiThread(() -> {
+                try {
+                    if (!isFinishing() && !isDestroyed()) webView.evaluateJavascript(script, null);
+                } catch (OutOfMemoryError exhausted) { /* Preserve the process if the WebView cannot display the error. */ }
+            });
+        }
+        catch (OutOfMemoryError exhausted) { /* Do not crash the bridge while reporting memory pressure. */ }
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
@@ -1222,7 +1319,9 @@ public final class MainActivity extends Activity {
             } else emit("speech", "done", null, 0, null);
         } else if (requestCode == EXPORT_CHATS) {
             String content = pendingExport;
+            String title = pendingExportTitle;
             pendingExport = null;
+            pendingExportTitle = null;
             if (resultCode == RESULT_OK && intent != null && intent.getData() != null && content != null) {
                 Uri uri = intent.getData();
                 requests.submit(() -> {
@@ -1230,7 +1329,8 @@ public final class MainActivity extends Activity {
                         if (output == null) throw new IllegalStateException();
                         output.write(content.getBytes(StandardCharsets.UTF_8));
                         emit("export", "done", null, 0, null);
-                    } catch (Exception failure) { emit("export", "error", "导出失败，请重试", 0, null); }
+                    } catch (Exception failure) { emit("export", "error", (title == null ? "文件" : title) + "导出失败，请重试", 0, null); }
+                    catch (OutOfMemoryError exhausted) { emitExportResourceError(); }
                 });
             } else emit("export", "done", null, 0, null);
         } else if (requestCode == MEDIA_EXPORT) {

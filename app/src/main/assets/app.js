@@ -3,6 +3,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const STORE = 'leihuo.chats.v1', PREFS = 'leihuo.preferences.v1', MODEL_STORE = 'leihuo.models.v1';
+  const MEMORY_STORE = 'leihuo.memory.v1';
   const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
   const native = window.Native;
   const pending = new Map();
@@ -10,6 +11,7 @@
   let chats = read(STORE, []), prefs = { theme: 'system', model: '', systemPrompt: '请使用用户的语言回答。', favorites: [], ...read(PREFS, {}) };
   let models = read(MODEL_STORE, []), endpointMap = {}, activeChat = null, attachments = [], activeRequest = null, activeRun = null, category = '全部';
   let pickingImages = false, imagePickerChat = null;
+  let sharedMemory = {version:1,enabled:true,notes:'',entries:[],ignored:[]}, memoryReady = false, memoryLoadFailed = false, memoryDirty = false, memoryError = '', memoryVisibleLimit = 50;
   let mediaOptions = read('leihuo.media-options.v1', { duration:8, aspectRatio:'16:9', resolution:'720p', generateAudio:true, voice:'', style:'', speed:1 });
   const audioOptionsByModel=read('leihuo.audio-options.v1',{}),videoOptionsByModel=read('leihuo.video-options.v1',{});
   let config = { baseUrl: 'https://ai.leihuo.netease.com', hasKey: false }, renderTimer = null, forceScroll = true, draft = '';
@@ -18,13 +20,86 @@
   const uuid = () => window.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
   function savePrefs() { localStorage.setItem(PREFS, JSON.stringify(prefs)); }
+  function ensureMessageIds(chat) {
+    const used = new Set(); let changed = false;
+    for (const message of chat.messages || []) {
+      if (!message || typeof message !== 'object') continue;
+      if (typeof message.id !== 'string' || !message.id || used.has(message.id)) { message.id=uuid(); changed=true; }
+      used.add(message.id);
+    }
+    return changed;
+  }
   function persist() {
     try {
       if (native?.saveChats) { const result = JSON.parse(native.saveChats(JSON.stringify(chats))); if (!result.ok) throw new Error(result.error); }
       else localStorage.setItem(STORE, JSON.stringify(chats));
     }
     catch { toast('手机存储空间不足，请导出对话后删除部分历史。', true); }
-    renderHistory(); updateStorageInfo();
+    syncSharedMemory(); renderHistory(); updateStorageInfo();
+  }
+  function loadSharedMemory() {
+    try {
+      if (!window.LeihuoMemory) throw new Error('综合记忆组件无法加载，请重新打开 App。');
+      const value = native?.loadMemory ? JSON.parse(native.loadMemory()) : JSON.parse(localStorage.getItem(MEMORY_STORE) || '{}');
+      sharedMemory = LeihuoMemory.normalize(value);
+      if (value?.error) throw new Error(value.error);
+      memoryReady = true;
+    } catch (error) { memoryReady = true; memoryLoadFailed = true; memoryError = error.message || '综合记忆无法读取，请重新打开 App。'; toast(memoryError,true); }
+  }
+  function updateMemoryStatus() {
+    const unavailable = !window.LeihuoMemory || memoryLoadFailed;
+    $('memoryEnabledSwitch').checked = sharedMemory.enabled;
+    $('memoryEnabledSwitch').disabled = unavailable;
+    $('memoryNotesInput').disabled = unavailable;
+    $('memoryNotesSaveButton').disabled = unavailable;
+    $('memoryExportButton').disabled = unavailable;
+    $('memoryClearButton').disabled = !window.LeihuoMemory;
+    $('memoryStatus').textContent = memoryError || `${sharedMemory.enabled ? '已开启，所有对话共用' : '已暂停自动记录和引用'} · ${sharedMemory.entries.length} 条记忆`;
+  }
+  function saveSharedMemory() {
+    if (!memoryReady || memoryLoadFailed) { toast('综合记忆无法读取，请重新打开 App，或在记忆设置里清空后重新建立。',true); return false; }
+    try {
+      const json = JSON.stringify(LeihuoMemory.exportData(sharedMemory));
+      if (native?.saveMemory) { const result = JSON.parse(native.saveMemory(json)); if (!result.ok) throw new Error(result.error || '综合记忆保存失败'); }
+      else localStorage.setItem(MEMORY_STORE,json);
+      memoryDirty = false; memoryError = ''; updateMemoryStatus(); return true;
+    } catch (error) {
+      const message = error.message || '综合记忆保存失败，请导出备份后重试。';
+      if (message !== memoryError) toast(message,true);
+      memoryDirty = true; memoryError = message; updateMemoryStatus(); return false;
+    }
+  }
+  function syncSharedMemory() {
+    if (!memoryReady || memoryLoadFailed || !window.LeihuoMemory) return;
+    try {
+      const result = LeihuoMemory.ingest(sharedMemory,chats); sharedMemory = result.state;
+      if (result.changed || memoryDirty) { memoryDirty = true; saveSharedMemory(); }
+      else updateMemoryStatus();
+      if (!$('memorySheet').hidden) renderMemory();
+    } catch (error) { memoryError = error.message || '综合记忆更新失败。'; updateMemoryStatus(); toast(memoryError,true); }
+  }
+  function renderMemory() {
+    updateMemoryStatus();
+    const query = $('memorySearch').value.trim().toLowerCase();
+    const entries = sharedMemory.entries.filter(entry => !query || `${entry.title}\n${entry.text}\n${entry.model}`.toLowerCase().includes(query)).sort((a,b) => b.updatedAt-a.updatedAt);
+    $('memoryCount').textContent = `${sharedMemory.entries.length} 条共享记忆${query ? ` · 找到 ${entries.length} 条` : ''}`;
+    $('memoryList').innerHTML = entries.slice(0,memoryVisibleLimit).map(entry => `<article class="memory-entry"><div class="memory-entry-copy"><strong class="memory-entry-title">${esc(entry.title || '对话记忆')}</strong><span class="memory-entry-meta">${entry.role==='user'?'你说的':'AI 回复'} · ${esc(new Date(entry.createdAt).toLocaleDateString())}</span><div class="memory-entry-content">${esc(entry.text)}</div></div><button type="button" data-remove-memory="${esc(entry.id)}" aria-label="删除这条记忆">${icon('trash')}</button></article>`).join('') || '<p class="list-empty">'+(query?'没有找到相关记忆。':'发送消息后，记忆会自动出现在这里。')+'</p>';
+    if (entries.length > memoryVisibleLimit) $('memoryList').insertAdjacentHTML('beforeend','<button type="button" class="settings-action" data-more-memory>显示更多记忆</button>');
+  }
+  function openMemory() { $('memoryNotesInput').value=sharedMemory.notes; $('memorySearch').value=''; memoryVisibleLimit=50; renderMemory(); showSheet('memorySheet'); }
+  function exportMemory() {
+    if (memoryLoadFailed || !window.LeihuoMemory) { toast('当前记忆无法读取，请先重新打开 App。',true); return; }
+    const json = JSON.stringify(LeihuoMemory.exportData(sharedMemory),null,2);
+    if (native?.exportMemory) native.exportMemory(json);
+    else { const url=URL.createObjectURL(new Blob([json],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='雷火综合记忆.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000); }
+  }
+  function combinedSystemInstruction(run) {
+    const instruction = prefs.systemPrompt.trim();
+    if (!memoryReady || memoryLoadFailed || !sharedMemory.enabled || !window.LeihuoMemory) return instruction;
+    const lastUser = run.chat.messages.filter(message=>message.role==='user').at(-1);
+    let context = LeihuoMemory.context(sharedMemory,{chatId:run.chat.id,query:lastUser ? messageText(lastUser) : '',maxChars:10000});
+    if (context && native?.sanitizeMemoryText) context = native.sanitizeMemoryText(context);
+    return [instruction,context].filter(Boolean).join('\n\n');
   }
   function toast(message, error = false) {
     const el = document.createElement('div'); el.className = `toast${error ? ' error' : ''}`; el.textContent = message;
@@ -344,13 +419,13 @@
   function messageText(message) {
     return message.content + (message.attachments || []).filter(f=>f.type==='file').map(file => `\n\n附件「${file.name}」：\n${file.text}`).join('');
   }
-  function historyPayload(protocol) {
+  function historyPayload(protocol, instruction = prefs.systemPrompt.trim()) {
     const messages = activeChat.messages.filter(m => m.role === 'user' || (m.role === 'assistant' && m.content && !m.error && !m.media?.length)).filter(m => !m.streaming);
     if (protocol === 'anthropic') return messages.map(m => ({role:m.role,content:[{type:'text',text:messageText(m) || '请分析附件。'},...(m.attachments || []).filter(f=>f.type==='image').map(f=>({type:'image',source:{type:'base64',media_type:'image/jpeg',data:f.data.split(',')[1]}}))]}));
     if (protocol === 'responses') return messages.map(m=>({role:m.role,content:[{type:m.role==='assistant'?'output_text':'input_text',text:messageText(m) || '请分析附件。'},...(m.attachments||[]).filter(f=>f.type==='image').map(f=>({type:'input_image',image_url:f.data}))]}));
     if (protocol === 'gemini') return messages.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:messageText(m) || '请分析附件。'},...(m.attachments||[]).filter(f=>f.type==='image').map(f=>({inlineData:{mimeType:'image/jpeg',data:f.data.split(',')[1]}}))]}));
     const result = messages.map(m=>({role:m.role,content:(m.attachments||[]).some(f=>f.type==='image') ? [{type:'text',text:messageText(m) || '请分析附件。'},...(m.attachments||[]).filter(f=>f.type==='image').map(f=>({type:'image_url',image_url:{url:f.data}}))] : messageText(m)}));
-    if (prefs.systemPrompt.trim()) result.unshift({role:'system',content:prefs.systemPrompt}); return result;
+    if (instruction) result.unshift({role:'system',content:instruction}); return result;
   }
   function chatRoute(model) {
     const endpoints = model.supported_endpoint_types || [];
@@ -381,11 +456,11 @@
   function ensureRun(run) { if(run?.canceled)throw Object.assign(new Error('已停止等待'),{canceled:true}); }
   async function awaitRequest(call,run) { ensureRun(run); if(activeRun===run){activeRequest=call.id;resizeComposer();}const result=await call.promise;ensureRun(run);return result; }
   async function generateChat(model, answer,run) {
-    const protocol = chatRoute(model); let endpoint, body, headers = {};
-    if (protocol === 'responses') { endpoint='/v1/responses'; body={model:model.id,input:historyPayload(protocol),stream:true}; if(prefs.systemPrompt.trim())body.instructions=prefs.systemPrompt; }
-    else if (protocol === 'anthropic') { endpoint='/v1/messages'; body={model:model.id,messages:historyPayload(protocol),max_tokens:8192,stream:true}; if(prefs.systemPrompt.trim())body.system=prefs.systemPrompt; headers={'anthropic-version':'2023-06-01'}; }
-    else if (protocol === 'gemini') { endpoint=`/v1beta/models/${encodeURIComponent(model.id)}:streamGenerateContent?alt=sse`; body={contents:historyPayload(protocol)}; if(prefs.systemPrompt.trim())body.systemInstruction={parts:[{text:prefs.systemPrompt}]}; }
-    else { endpoint='/v1/chat/completions'; body={model:model.id,messages:historyPayload(protocol),stream:true}; }
+    const protocol = chatRoute(model), instruction = combinedSystemInstruction(run); let endpoint, body, headers = {};
+    if (protocol === 'responses') { endpoint='/v1/responses'; body={model:model.id,input:historyPayload(protocol,instruction),stream:true}; if(instruction)body.instructions=instruction; }
+    else if (protocol === 'anthropic') { endpoint='/v1/messages'; body={model:model.id,messages:historyPayload(protocol,instruction),max_tokens:8192,stream:true}; if(instruction)body.system=instruction; headers={'anthropic-version':'2023-06-01'}; }
+    else if (protocol === 'gemini') { endpoint=`/v1beta/models/${encodeURIComponent(model.id)}:streamGenerateContent?alt=sse`; body={contents:historyPayload(protocol,instruction)}; if(instruction)body.systemInstruction={parts:[{text:instruction}]}; }
+    else { endpoint='/v1/chat/completions'; body={model:model.id,messages:historyPayload(protocol,instruction),stream:true}; }
     const call = request(endpoint,body,{stream:true,headers,onData:raw=>streamDelta(raw,protocol,answer)});
     const result = await awaitRequest(call,run);
     if (!answer.content && !answer.media.length && result && typeof result === 'object') {
@@ -527,16 +602,16 @@
     const model = selectedModel();
     if(kind(model)!=='聊天' && !overrides){try{overrides=mediaTemplate(model,text || '请分析附件。',attachments);if(!overrides){toast('此模型需要先同步雷火接口，输入内容会保留。');showSheet('settingsSheet');return;}}catch(error){toast(error.message,true);return;}}
     if (!activeChat) { activeChat={id:uuid(),title:(text || attachments[0]?.name || '新对话').slice(0,32),model:model.id,createdAt:Date.now(),updatedAt:Date.now(),messages:[]}; chats.unshift(activeChat); }
-    activeChat.messages.push({id:uuid(),role:'user',content:text,attachments:attachments.slice()});
+    activeChat.messages.push({id:uuid(),role:'user',content:text,attachments:attachments.slice(),createdAt:Date.now(),model:model.id});
     $('messageInput').value=''; attachments=[]; draft=''; renderAttachments();
     await runGeneration(model, text || '请分析附件。', overrides);
   }
   async function runGeneration(model,prompt,overrides) {
-    const chat = activeChat, answer={id:uuid(),role:'assistant',content:'',reasoning:'',media:[],model:model.id,streaming:true}; chat.messages.push(answer); forceScroll=true;
+    const chat = activeChat, answer={id:uuid(),role:'assistant',content:'',reasoning:'',media:[],model:model.id,streaming:true,createdAt:Date.now()}; chat.messages.push(answer); forceScroll=true;
     const run={chat,answer,canceled:false};activeRun=run;
     persist(); renderMessages();
     try { if (kind(model)==='聊天' && !overrides) await generateChat(model,answer,run); else await generateMedia(model,answer,prompt,overrides,run); }
-    catch (error) { if(answer.task && answer.task.status!=='failed')answer.task.status='paused';if(!error.canceled)answer.error=error.message;if(answer.task)answer.content=error.canceled?'已停止等待，任务编号已保存。':answer.task.status==='failed'?'视频生成失败。':'任务编号已保存，可以继续查询。';else if(error.canceled && !answer.content && !answer.media.length)answer.content=kind(model)==='视频'?'已停止等待视频结果。':'已停止生成。'; }
+    catch (error) { if(error.canceled)answer.incomplete=true;if(answer.task && answer.task.status!=='failed')answer.task.status='paused';if(!error.canceled)answer.error=error.message;if(answer.task)answer.content=error.canceled?'已停止等待，任务编号已保存。':answer.task.status==='failed'?'视频生成失败。':'任务编号已保存，可以继续查询。';else if(error.canceled && !answer.content && !answer.media.length)answer.content=kind(model)==='视频'?'已停止等待视频结果。':'已停止生成。'; }
     finally { answer.streaming=false; if(activeRun===run){activeRun=null;activeRequest=null;}chat.updatedAt=Date.now();persist();if(activeChat===chat)renderMessages();resizeComposer(); }
   }
   function stopGeneration() { if(activeRun)activeRun.canceled=true;const id=activeRequest;activeRun=null;activeRequest=null;if(id)cancelRequest(id);resizeComposer(); }
@@ -576,6 +651,7 @@
       for(const chat of list) {
         if(!chat || typeof chat.id!=='string' || typeof chat.title!=='string' || !Array.isArray(chat.messages) || !chat.messages.every(m=>m && ['user','assistant'].includes(m.role) && typeof m.content==='string'))continue;
         if(chats.some(c=>c.id===chat.id))continue;
+        ensureMessageIds(chat);
         chats.push({...chat,createdAt:Number(chat.createdAt)||Date.now(),updatedAt:Number(chat.updatedAt)||Date.now(),messages:chat.messages.map(m=>({...m,streaming:false}))});count++;
       }
       persist();toast(`已导入 ${count} 个对话`);
@@ -669,6 +745,13 @@
       }catch(error){toast(error.message,true);}
     };
     $('keyVisibilityButton').onclick=()=>{const input=$('apiKeyInput');input.type=input.type==='password'?'text':'password';};
+    $('manageMemoryButton').onclick=openMemory;
+    $('memoryEnabledSwitch').onchange=()=>{if(memoryLoadFailed){updateMemoryStatus();toast('综合记忆无法读取，请重新打开 App 后再试。',true);return;}sharedMemory.enabled=$('memoryEnabledSwitch').checked;memoryDirty=true;syncSharedMemory();};
+    $('memorySearch').oninput=()=>{memoryVisibleLimit=50;renderMemory();};
+    $('memoryNotesSaveButton').onclick=()=>{if(memoryLoadFailed){toast('综合记忆无法读取，请重新打开 App，或清空后重新建立。',true);return;}sharedMemory.notes=$('memoryNotesInput').value;sharedMemory=LeihuoMemory.normalize(sharedMemory);memoryDirty=true;if(saveSharedMemory()){ $('memoryNotesInput').value=sharedMemory.notes;toast('长期信息已保存，所有对话均可引用。');renderMemory();}};
+    $('memoryExportButton').onclick=exportMemory;
+    $('memoryList').onclick=async e=>{const more=e.target.closest('[data-more-memory]');if(more){memoryVisibleLimit+=50;renderMemory();return;}if(memoryLoadFailed || !window.LeihuoMemory)return;const remove=e.target.closest('[data-remove-memory]');if(!remove)return;if(await confirmAction('删除这条记忆？','删除后其他对话将不再引用这条记忆，原来的聊天记录会保留。')){sharedMemory=LeihuoMemory.remove(sharedMemory,remove.dataset.removeMemory);memoryDirty=true;saveSharedMemory();renderMemory();}};
+    $('memoryClearButton').onclick=async()=>{if(!window.LeihuoMemory)return;if(await confirmAction('清空综合记忆？','这会删除全部共享记忆和长期信息，已有聊天记录会保留。清空后只自动记录新消息。')){sharedMemory=LeihuoMemory.clear(sharedMemory,chats);memoryLoadFailed=false;memoryDirty=true;if(saveSharedMemory()){ $('memoryNotesInput').value='';renderMemory();toast('综合记忆已清空');}}};
     $('themeSelect').onchange=()=>{prefs.theme=$('themeSelect').value;savePrefs();applyTheme();};
     $('messageInput').oninput=()=>{draft=$('messageInput').value;resizeComposer();};
     $('messageInput').onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMessage();}};
@@ -696,19 +779,21 @@
     $('scrollBottomButton').onclick=()=>{forceScroll=true;$('messageViewport').scrollTo({top:$('messageViewport').scrollHeight,behavior:'smooth'});};
     $('exportButton').onclick=exportChats;$('importButton').onclick=()=>native?.importChats?native.importChats():$('importInput').click();
     $('importInput').onchange=async()=>{if($('importInput').files[0])importChats(await $('importInput').files[0].text());$('importInput').value='';};
-    $('clearHistoryButton').onclick=async()=>{if(waitForImages())return;if(await confirmAction('清空所有对话？','这个操作会删除此手机上的全部历史对话。')){stopGeneration();chats=[];persist();newChat();toast('历史对话已清空');}};
+    $('clearHistoryButton').onclick=async()=>{if(waitForImages())return;if(await confirmAction('清空所有对话？','这个操作会删除此手机上的全部历史对话。综合记忆可在记忆设置中单独清空。')){stopGeneration();chats=[];persist();newChat();toast('历史对话已清空');}};
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyTheme);
     document.addEventListener('visibilitychange',()=>{if(document.hidden)persist();});
     if(window.visualViewport){const adjust=()=>{document.documentElement.style.setProperty('--viewport-height',`${visualViewport.height}px`);};visualViewport.addEventListener('resize',adjust);adjust();}
   }
   async function init() {
     try { if(native?.loadChats)chats=JSON.parse(native.loadChats() || '[]'); }catch{/* use legacy cache */}
-    bind();getConfig();applyTheme();$('systemPromptInput').value=prefs.systemPrompt;
+    let migratedIds = false;
+    for (const chat of chats) if (ensureMessageIds(chat)) migratedIds = true;
+    bind();getConfig();loadSharedMemory();applyTheme();$('systemPromptInput').value=prefs.systemPrompt;
     try { const results=await Promise.allSettled([fetch('model-catalog.json').then(r=>r.json()),fetch('gateway-endpoints.json').then(r=>r.json())]);if(!models.length&&results[0].status==='fulfilled')models=results[0].value.data || results[0].value;if(results[1].status==='fulfilled')endpointMap=results[1].value; }catch{/* use last cache */}
     // Interrupted generations remain readable after Android reclaims the app process.
-    for(const chat of chats)for(const message of chat.messages)if(message.streaming){message.streaming=false;if(message.task){message.task.status='paused';message.content='任务编号已保存，可以继续查询视频。';}else if(!message.content)message.content='生成已中断，请重新生成。';}
+    for(const chat of chats)for(const message of chat.messages)if(message.streaming){message.streaming=false;message.incomplete=true;if(message.task){message.task.status='paused';message.content='任务编号已保存，可以继续查询视频。';}else if(!message.content)message.content='生成已中断，请重新生成。';}
     try{if(native?.loadInterfaces)applyInterfaces(JSON.parse(native.loadInterfaces()));}catch{/* no synchronized metadata yet */}
-    ensureModel();updateModelLabel();renderHistory();renderMessages();renderModels();resizeComposer();updateStorageInfo();
+    ensureModel();if(migratedIds)persist();else syncSharedMemory();updateMemoryStatus();updateModelLabel();renderHistory();renderMessages();renderModels();resizeComposer();updateStorageInfo();
     try {
       const picked = JSON.parse(native?.takePickedImages?.() || 'null');
       const duplicate = typeof picked?.pickerEventId === 'string' && pickedImageEvents.has(picked.pickerEventId);

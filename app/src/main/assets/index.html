@@ -14,6 +14,7 @@
   <script defer src="vendor/mammoth.browser.min.js"></script>
   <script defer src="audio-profiles.js"></script>
   <script defer src="video-profiles.js"></script>
+  <script defer src="memory.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -124,6 +125,13 @@
           <div class="form-field setting-inline"><label for="themeSelect">外观</label><select id="themeSelect"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
           <div class="form-field"><label for="systemPromptInput">自定义指令</label><textarea id="systemPromptInput" rows="4" placeholder="你希望 AI 如何回答？"></textarea><p class="field-hint">这些指令会用于每次对话。</p></div>
         </section>
+        <section class="settings-section memory-settings-section"><h3>综合记忆</h3>
+          <div class="memory-toggle-row"><label for="memoryEnabledSwitch">自动记住所有对话</label><input id="memoryEnabledSwitch" class="memory-switch" type="checkbox" role="switch" checked aria-describedby="memoryDescription"></div>
+          <p id="memoryDescription" class="field-hint">所有对话的聊天文字自动汇入记忆，新对话和换模型都能引用。关闭后暂停保存与引用，期间的新消息不会补录。</p>
+          <p id="memoryStatus" class="field-hint" role="status">开始聊天后，会自动保存综合记忆。</p>
+          <button id="manageMemoryButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-file"/></svg><span>管理综合记忆</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
+          <p class="field-hint">记忆保存在这台手机上，回复时会将相关记忆发送给当前模型。历史对话与综合记忆分别管理。</p>
+        </section>
         <button id="saveSettingsButton" class="primary-button" type="submit">保存设置</button>
       </form>
       <section class="settings-section data-section"><h3>对话数据</h3><p id="storageInfo" class="field-hint">对话保存在这台设备上。</p>
@@ -131,7 +139,29 @@
         <button id="importButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-upload"/></svg><span>导入对话</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
         <button id="clearHistoryButton" class="settings-action danger" type="button"><svg class="icon"><use href="#icon-trash"/></svg><span>清空所有对话</span></button>
       </section>
-      <p class="app-version">雷火 <span id="appVersion">1.1.0</span></p>
+      <p class="app-version">雷火 <span id="appVersion">1.2.0</span></p>
+    </div>
+  </section>
+
+  <section id="memorySheet" class="sheet memory-sheet" role="dialog" aria-modal="true" aria-labelledby="memorySheetTitle" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><div><h2 id="memorySheetTitle">综合记忆</h2><p>所有对话共用，换模型也能引用</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭综合记忆"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="memory-search-row"><div class="search-box"><svg class="icon"><use href="#icon-search"/></svg><input id="memorySearch" type="search" placeholder="搜索记忆" aria-label="搜索综合记忆" autocomplete="off"></div></div>
+    <div class="sheet-scroll memory-content">
+      <p class="field-hint memory-scope-hint">图片、音频只记录附件名称；文件中可读取的文字和 AI 的识别回复会保存为记忆。</p>
+      <section class="memory-notes-section">
+        <div class="form-field"><label for="memoryNotesInput">希望一直记住的信息</label><textarea id="memoryNotesInput" rows="4" placeholder="例如：默认用中文回答，给方案时尽量具体。"></textarea><p class="field-hint">可以写下你的偏好、习惯或长期背景。</p></div>
+        <button id="memoryNotesSaveButton" class="secondary-button" type="button">保存长期信息</button>
+      </section>
+      <section class="memory-archive-section" aria-label="已保存的记忆">
+        <div class="memory-list-heading"><h3>对话记忆</h3><span id="memoryCount" role="status">0 条</span></div>
+        <div id="memoryList" class="memory-list"><p class="memory-empty">还没有对话记忆，聊天后会自动保存在这里。</p></div>
+      </section>
+      <div class="memory-data-actions">
+        <button id="memoryExportButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-download"/></svg><span>导出综合记忆</span></button>
+        <button id="memoryClearButton" class="settings-action danger" type="button"><svg class="icon"><use href="#icon-trash"/></svg><span>清空综合记忆</span></button>
+        <p class="field-hint">清空综合记忆不会删除历史对话。</p>
+      </div>
     </div>
   </section>
 
