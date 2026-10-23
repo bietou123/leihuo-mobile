@@ -34,6 +34,8 @@ import okhttp3.ResponseBody;
 public final class GatewayDns implements Dns {
     private static final String GATEWAY_HOST = "ai.leihuo.netease.com";
     private static final String[] RESOLVERS = {
+            "https://223.5.5.5/resolve?name=" + GATEWAY_HOST + "&type=A",
+            "https://223.6.6.6/resolve?name=" + GATEWAY_HOST + "&type=A",
             "https://1.1.1.1/dns-query?name=" + GATEWAY_HOST + "&type=A",
             "https://8.8.8.8/resolve?name=" + GATEWAY_HOST + "&type=A"
     };
@@ -43,9 +45,17 @@ public final class GatewayDns implements Dns {
     private static final int MAX_ADDRESSES = 32;
 
     private final SharedPreferences cache;
+    private final Dns systemDns;
     private final OkHttpClient resolverClient;
 
     public GatewayDns(Context context) {
+        this(context, Dns.SYSTEM);
+    }
+
+    // Keep production system DNS first; the package constructor permits failure checks.
+    GatewayDns(Context context, Dns systemDns) {
+        if (systemDns == null) throw new IllegalArgumentException("System DNS must be provided");
+        this.systemDns = systemDns;
         cache = context.getApplicationContext().getSharedPreferences("gateway_dns", Context.MODE_PRIVATE);
         // This client never inherits API headers, cookies, credentials or gateway DNS.
         // IP bootstrap still uses the platform's default TLS and IP certificate checks.
@@ -76,7 +86,7 @@ public final class GatewayDns implements Dns {
         if (hostname == null || hostname.isEmpty()) throw new UnknownHostException("Empty hostname");
         UnknownHostException systemFailure;
         try {
-            List<InetAddress> addresses = Dns.SYSTEM.lookup(hostname);
+            List<InetAddress> addresses = systemDns.lookup(hostname);
             if (addresses.isEmpty()) throw new UnknownHostException("No system DNS addresses");
             if (GATEWAY_HOST.equalsIgnoreCase(hostname)) saveCache(addresses, SYSTEM_TTL_SECONDS);
             return addresses;

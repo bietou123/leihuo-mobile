@@ -113,14 +113,20 @@
 
   <section id="settingsSheet" class="sheet settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle" tabindex="-1" hidden>
     <div class="sheet-handle" aria-hidden="true"></div>
-    <header class="sheet-header"><div><h2 id="settingsSheetTitle">设置</h2><p>连接你的雷火账户</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭设置"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <header class="sheet-header"><div><h2 id="settingsSheetTitle">设置</h2><p>连接雷火网关或你的 NAS</p></div><button class="icon-button" type="button" data-close-sheet aria-label="关闭设置"><svg class="icon"><use href="#icon-close"/></svg></button></header>
     <div class="sheet-scroll settings-content">
       <form id="settingsForm" autocomplete="off">
         <section class="settings-section"><h3>雷火连接</h3>
-          <div class="form-field"><label for="baseUrlInput">API 地址</label><input id="baseUrlInput" type="url" placeholder="https://ai.leihuo.netease.com" autocapitalize="off" spellcheck="false"><p class="field-hint">填写雷火的 API 地址。</p></div>
-          <div class="form-field"><label for="apiKeyInput">API Key</label><div class="input-with-action"><input id="apiKeyInput" type="password" placeholder="输入你的 API Key" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="keyVisibilityButton" class="icon-button" type="button" aria-label="显示密钥"><svg class="icon"><use href="#icon-eye"/></svg></button></div><p class="field-hint">密钥仅保存在这台设备上。</p></div>
+          <div class="form-field"><label for="baseUrlInput">API 地址</label><input id="baseUrlInput" type="url" placeholder="https://ai.leihuo.netease.com" autocapitalize="off" spellcheck="false"><p id="baseUrlHint" class="field-hint">填写雷火网关地址，或 NAS 设置页提供的手机 App 服务地址。</p></div>
+          <div class="form-field"><label id="apiKeyLabel" for="apiKeyInput">API Key</label><div class="input-with-action"><input id="apiKeyInput" type="password" placeholder="输入你的 API Key" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="keyVisibilityButton" class="icon-button" type="button" aria-label="显示密钥"><svg class="icon"><use href="#icon-eye"/></svg></button></div><p id="apiKeyHint" class="field-hint">密钥仅保存在这台设备上。</p></div>
           <div class="connection-row"><span id="connectionStatus" class="connection-status">尚未连接</span><button id="settingsRefreshButton" class="text-button" type="button"><svg class="icon"><use href="#icon-refresh"/></svg>刷新模型</button></div>
           <button id="syncInterfacesButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-refresh"/></svg><span>登录雷火并同步更多接口</span></button><p id="interfaceSyncStatus" class="field-hint">使用雷火官方用户中心同步专用接口，登录信息只留在官方页面。</p>
+        </section>
+        <section id="nasConnectionSection" class="settings-section" hidden><h3>NAS 登录</h3>
+          <p class="field-hint">先完成 FN Connect 连接和飞牛登录，再使用独立的 NAS API Key 访问模型。登录页面与聊天页分开打开。</p>
+          <div class="form-field"><label for="nasLoginUrlInput">NAS 登录地址</label><input id="nasLoginUrlInput" type="url" placeholder="默认使用 NAS 首页" autocomplete="off" autocapitalize="off" spellcheck="false"><p class="field-hint">通常使用 NAS 首页；留空恢复默认。可填写当前 NAS 或 fnos.net 的 HTTPS 地址。</p></div>
+          <button id="nasLoginButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-external"/></svg><span>登录 NAS</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
+          <p id="nasLoginStatus" class="field-hint" role="status">点击后会先保存当前设置。登录信息仅用于此 NAS 的连接。</p>
         </section>
         <section class="settings-section"><h3>个性化</h3>
           <div class="form-field setting-inline"><label for="themeSelect">外观</label><select id="themeSelect"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
@@ -140,7 +146,7 @@
         <button id="importButton" class="settings-action" type="button"><svg class="icon"><use href="#icon-upload"/></svg><span>导入对话</span><svg class="icon trailing"><use href="#icon-chevron"/></svg></button>
         <button id="clearHistoryButton" class="settings-action danger" type="button"><svg class="icon"><use href="#icon-trash"/></svg><span>清空所有对话</span></button>
       </section>
-      <p class="app-version">雷火 <span id="appVersion">1.2.2</span></p>
+      <p class="app-version">雷火 <span id="appVersion">1.2.4</span></p>
     </div>
   </section>
 

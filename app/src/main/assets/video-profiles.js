@@ -19,7 +19,10 @@
     method: 'GET',
     idPaths: ['id', 'task_id', 'data.id', 'data.task_id'],
     statusPaths: ['status', 'data.status', 'task_status', 'data.task_status'],
-    mediaPaths: ['content.video_url', 'data.content.video_url'],
+    mediaPaths: [
+      'content.video_url', 'data.content.video_url', 'data.data.content.video_url',
+      'result_url', 'data.result_url'
+    ],
     errorPaths: ['error.message', 'data.error.message', 'message', 'data.message']
   });
   const WAN_SIZES = Object.freeze({
@@ -137,11 +140,16 @@
 
   function normalizeTask(task) {
     if (!task || typeof task !== 'object' || Array.isArray(task)
-      || String(task.method || 'GET').toUpperCase() !== 'GET'
-      || !['/v1/video/generations/$TASK_ID', '/v1/videos/$TASK_ID'].includes(task.path)) return task;
+      || String(task.method || 'GET').toUpperCase() !== 'GET') return task;
+    const standard = ['/v1/video/generations/$TASK_ID', '/v1/videos/$TASK_ID'].includes(task.path);
+    // Saved Ark tasks keep their original mediaPaths across app upgrades. Add
+    // the confirmed TaskDto wrappers when resuming those existing tasks too.
+    const ark = validLocalPath(task.path) && task.path.endsWith('/api/v3/contents/generations/tasks/$TASK_ID');
+    if (!standard && !ark) return task;
+    const defaults = standard ? TASK : SEEDANCE_TASK;
     const supplied = Object.fromEntries(Object.entries(task).filter(([,value]) => value !== undefined));
     const mediaPaths = Array.isArray(task.mediaPaths) ? task.mediaPaths.filter(path => typeof path === 'string' && path) : [];
-    return {...TASK, ...supplied, mediaPaths: [...new Set([...mediaPaths, ...TASK.mediaPaths])]};
+    return {...defaults, ...supplied, mediaPaths: [...new Set([...mediaPaths, ...defaults.mediaPaths])]};
   }
 
   function standardVideoRoute(model, endpointMap) {

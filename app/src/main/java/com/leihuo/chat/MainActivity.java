@@ -73,6 +73,7 @@ public final class MainActivity extends Activity {
     private static final int MEDIA_EXPORT = 105;
     private static final int INTERFACE_SYNC = 106;
     private static final int IMAGE_PICKER = 107;
+    private static final int NAS_LOGIN = 108;
     private static final int MAX_IMAGE_BYTES = 15 * 1024 * 1024;
     private static final int MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
     private static final String ASSET_HOST = "leihuo.local";
@@ -252,7 +253,9 @@ public final class MainActivity extends Activity {
                 // A new connection and origin/path check are required on every redirect.
                 String mediaKey = gatewayVideoContentKey(target);
                 if (!mediaKey.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + mediaKey);
-                // Browser cookies and authorization headers are never forwarded to media URLs.
+                attachNasSession(connection, target);
+                // Session attachment is independently checked for every NAS API redirect hop.
+                // External media and CDN URLs receive no browser cookies.
                 for (Map.Entry<String, String> header : rangeHeaders.entrySet()) connection.setRequestProperty(header.getKey(), header.getValue());
                 int status = connection.getResponseCode();
                 if (status >= 300 && status < 400) {
@@ -322,15 +325,23 @@ public final class MainActivity extends Activity {
 
     private boolean isGatewayVideoContent(URL target) throws Exception {
         synchronized (config) {
-            URL gateway = new URL(config.baseUrl());
-            if (!"https".equalsIgnoreCase(gateway.getProtocol()) || !"https".equalsIgnoreCase(target.getProtocol())
-                    || gateway.getUserInfo() != null || target.getUserInfo() != null
-                    || !gateway.getHost().equalsIgnoreCase(target.getHost())
-                    || effectiveHttpsPort(gateway) != effectiveHttpsPort(target)) return false;
-            String path = target.toURI().getRawPath();
-            // Restrict IDs to unreserved characters: encoded slash/backslash and nested encoding
-            // cannot alter the route after the key has been attached.
-            return path != null && path.matches("/v1/videos/(?!\\./)[A-Za-z0-9._~-]+/content") && !path.contains("..");
+            return NasSessionPolicy.isVideoContent(config.baseUrl(), target);
+        }
+    }
+
+    private void attachNasSession(HttpURLConnection connection, URL target) throws java.io.IOException {
+        synchronized (config) {
+            if (!NasSessionPolicy.shouldAttach(config.baseUrl(), target)) return;
+            try {
+                String session = CookieManager.getInstance().getCookie(target.toExternalForm());
+                if (session != null && !session.isEmpty() && session.length() <= 16384
+                        && session.indexOf('\r') < 0 && session.indexOf('\n') < 0) {
+                    connection.setRequestProperty("Cookie", session);
+                }
+            } catch (Exception unavailable) {
+                // Do not propagate cookie contents or header validation errors to the UI.
+                throw new java.io.IOException("无法读取 NAS 登录会话，请在设置中重新登录 NAS");
+            }
         }
     }
 
@@ -385,7 +396,8 @@ public final class MainActivity extends Activity {
                 probe.setRequestProperty("Accept-Encoding", "identity");
                 String mediaKey = gatewayVideoContentKey(target);
                 if (!mediaKey.isEmpty()) probe.setRequestProperty("Authorization", "Bearer " + mediaKey);
-                // The probe is a separate read-only media request, without browser cookies/headers.
+                attachNasSession(probe, target);
+                // Only the configured NAS API path may receive its login session.
                 int status = probe.getResponseCode();
                 if (status >= 300 && status < 400) {
                     String location = probe.getHeaderField("Location");
@@ -843,6 +855,7 @@ public final class MainActivity extends Activity {
             connection.setRequestProperty("Authorization", "Bearer " + secret);
             if (endpoint.contains("/messages")) connection.setRequestProperty("x-api-key", secret);
             if (endpoint.startsWith("/v1beta/")) connection.setRequestProperty("x-goog-api-key", secret);
+            attachNasSession(connection, target);
             connection.setRequestProperty("Accept", options.optBoolean("stream", false) ? "text/event-stream, application/json" : "application/json, */*");
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             connection.setRequestProperty("User-Agent", "LeihuoMobile/1.0 Android");
@@ -892,7 +905,11 @@ public final class MainActivity extends Activity {
             InputStream input = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
             if (status < 200 || status >= 300) {
                 String error = input == null ? "网关请求失败" : new String(readAll(input, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8);
-                if (status >= 300 && status < 400) error = "网关返回了重定向，请在设置中填写最终 HTTPS 网关地址";
+                if (status >= 300 && status < 400) error = NasSessionPolicy.isNasGateway(config.baseUrl())
+                        ? "NAS 要求登录，请在设置中点“登录 NAS”，完成 FN Connect 连接和飞牛登录后再刷新模型"
+                        : "网关返回了重定向，请在设置中填写最终 HTTPS 网关地址";
+                else if (NasSessionPolicy.isNasGateway(config.baseUrl()) && (status == 401 || status == 403))
+                    error = "NAS 拒绝了请求，请检查 NAS API 访问密钥，并在设置中重新登录 NAS";
                 emit(id, "error", redact(error, secret), status, null);
                 return;
             }
@@ -1310,7 +1327,8 @@ public final class MainActivity extends Activity {
                         connection.setConnectTimeout(20000);
                         connection.setReadTimeout(60000);
                         connection.setInstanceFollowRedirects(false);
-                        // Public image downloads never receive gateway authentication or cookies.
+                        attachNasSession(connection, target);
+                        // Public image and CDN paths never receive gateway authentication or cookies.
                         int status = connection.getResponseCode();
                         if (status >= 300 && status < 400) {
                             String location = connection.getHeaderField("Location");
@@ -1431,6 +1449,21 @@ public final class MainActivity extends Activity {
                 Intent intent = new Intent(MainActivity.this, GatewayLoginActivity.class);
                 intent.putExtra("gateway", config.baseUrl());
                 startActivityForResult(intent, INTERFACE_SYNC);
+            });
+        }
+
+        @JavascriptInterface public void loginNas() {
+            runOnUiThread(() -> {
+                String base = config.baseUrl();
+                String login = config.nasLoginUrl();
+                if (!NasSessionPolicy.allowedLoginUrl(base, login)) {
+                    emit("nas-login", "error", "请先保存包含 /app/leihuo 的 NAS HTTPS 地址和有效登录地址", 0, null);
+                    return;
+                }
+                Intent intent = new Intent(MainActivity.this, NasLoginActivity.class);
+                intent.putExtra("gateway", base);
+                intent.putExtra("loginUrl", login);
+                startActivityForResult(intent, NAS_LOGIN);
             });
         }
 
@@ -1604,7 +1637,10 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
         super.onActivityResult(requestCode, resultCode, intent);
-        if (requestCode == INTERFACE_SYNC) {
+        if (requestCode == NAS_LOGIN) {
+            if (resultCode == RESULT_OK) emit("nas-login", "data", "NAS 登录页面已关闭，正在重新读取模型目录", 0, null);
+            else emit("nas-login", "done", null, 0, null);
+        } else if (requestCode == INTERFACE_SYNC) {
             if (resultCode == RESULT_OK && intent != null) {
                 try {
                     String gateway = intent.getStringExtra("gateway");

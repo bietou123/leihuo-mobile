@@ -22,8 +22,12 @@ import android.widget.Toast;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.UUID;
@@ -164,7 +168,11 @@ public final class GatewayLoginActivity extends Activity {
                 + "const path=value.path;const method=String(value.method||'POST').toUpperCase();"
                 + "if(typeof path!=='string'||path.length>2048||!path.startsWith('/')||path.startsWith('//'))continue;"
                 + "if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))continue;"
-                + "endpoints[type]={path,method};if(Object.keys(endpoints).length>=256)break;}}"
+                + "const route={path,method};const task=value.task;"
+                + "if(task&&typeof task==='object'&&!Array.isArray(task)&&typeof task.path==='string'"
+                + "&&task.path.length<=2048&&task.path.startsWith('/')&&!task.path.startsWith('//')"
+                + "&&String(task.method||'').toUpperCase()==='GET')route.task={path:task.path,method:'GET',synced:true};"
+                + "endpoints[type]=route;if(Object.keys(endpoints).length>=256)break;}}"
                 + "window[slot]=Object.keys(endpoints).length?{state:'ready',endpoints}:{state:'empty'};"
                 + "}).catch(()=>{window[slot]={state:'failed'};}).finally(()=>clearTimeout(timeout));return true;})()";
         webView.evaluateJavascript(script, value -> {
@@ -284,9 +292,56 @@ public final class GatewayLoginActivity extends Activity {
             if (path.isEmpty() || path.length() > 2048 || !path.startsWith("/") || path.startsWith("//")
                     || path.contains("\\") || path.contains("..") || path.matches("(?s).*[\\x00-\\x20\\x7F].*")) continue;
             if (!method.matches("GET|POST|PUT|PATCH|DELETE")) continue;
-            clean.put(type, new JSONObject().put("path", path).put("method", method));
+            JSONObject route = new JSONObject().put("path", path).put("method", method);
+            JSONObject task = endpoint.optJSONObject("task");
+            // The authenticated official response proves the mapping's source. Mark
+            // it locally only after validating, without copying request/response fields.
+            if (task != null && "GET".equalsIgnoreCase(task.optString("method", ""))
+                    && task.opt("path") instanceof String && validTaskPath(task.getString("path"))) {
+                route.put("task", new JSONObject().put("path", task.getString("path"))
+                        .put("method", "GET").put("synced", true));
+            }
+            clean.put(type, route);
         }
         return clean;
+    }
+
+    private static boolean validTaskPath(String path) {
+        if (path == null || path.length() > 2048 || !path.startsWith("/") || path.startsWith("//")) return false;
+        int taskId = path.indexOf("$TASK_ID");
+        if (taskId < 0 || taskId != path.lastIndexOf("$TASK_ID")
+                || path.matches("(?s).*%(?![0-9A-Fa-f]{2}).*")) return false;
+        for (int index = 0; index < path.length(); index++) {
+            char value = path.charAt(index);
+            if (value <= 0x20 || value == 0x7f || value == '\\' || value == '#'
+                    || value == '\ufeff' || Character.isWhitespace(value) || Character.isSpaceChar(value)) return false;
+        }
+        try {
+            String rawPath = path.split("\\?", 2)[0];
+            String decoded = decodeTaskPath(rawPath);
+            if (decoded.startsWith("//") || decoded.matches("(?s).*[\\\\\\x00-\\x1F\\x7F].*")
+                    || decoded.matches("(?is).*%(?:2e|2f|5c|25).*")) return false;
+            for (String segment : decoded.split("/", -1)) if (segment.equals(".") || segment.equals("..")) return false;
+            URL target = new URL(new URL("https://leihuo.invalid"), path);
+            return "https".equals(target.getProtocol()) && "leihuo.invalid".equals(target.getHost())
+                    && target.getPort() == -1 && target.getUserInfo() == null;
+        } catch (Exception invalid) { return false; }
+    }
+
+    // Strict UTF-8 percent decoding matches decodeURIComponent; '+' stays literal.
+    private static String decodeTaskPath(String path) throws Exception {
+        StringBuilder decoded = new StringBuilder();
+        for (int index = 0; index < path.length();) {
+            if (path.charAt(index) != '%') { decoded.append(path.charAt(index++)); continue; }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            while (index < path.length() && path.charAt(index) == '%') {
+                bytes.write(Integer.parseInt(path.substring(index + 1, index + 3), 16));
+                index += 3;
+            }
+            decoded.append(StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes.toByteArray())));
+        }
+        return decoded.toString();
     }
 
     @Override protected void onResume() {

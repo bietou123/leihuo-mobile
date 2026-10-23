@@ -31,7 +31,13 @@ final class ConfigStore {
     }
 
     synchronized JSONObject publicConfig() throws Exception {
-        return new JSONObject().put("baseUrl", baseUrl()).put("hasKey", !apiKey().isEmpty());
+        return new JSONObject().put("baseUrl", baseUrl()).put("hasKey", !apiKey().isEmpty())
+                .put("nasSessionEnabled", NasSessionPolicy.isNasGateway(baseUrl())).put("nasLoginUrl", nasLoginUrl());
+    }
+
+    synchronized String nasLoginUrl() {
+        String saved = prefs.getString("nasLoginUrl", "");
+        return NasSessionPolicy.allowedLoginUrl(baseUrl(), saved) ? saved : NasSessionPolicy.defaultLoginUrl(baseUrl());
     }
 
     synchronized String apiKey() throws Exception {
@@ -54,6 +60,12 @@ final class ConfigStore {
             throw new IllegalArgumentException("请输入有效的 HTTPS 网关地址");
         }
         SharedPreferences.Editor edit = prefs.edit().putString("baseUrl", rawBase);
+        if (input.has("nasLoginUrl")) {
+            String login = input.optString("nasLoginUrl").trim();
+            if (login.isEmpty()) edit.remove("nasLoginUrl");
+            else if (NasSessionPolicy.allowedLoginUrl(rawBase, login)) edit.putString("nasLoginUrl", login);
+            else throw new IllegalArgumentException("NAS 登录地址必须是当前 NAS 或 fnos.net 的 HTTPS 地址，不能包含账号、查询参数或片段");
+        }
         if (input.optBoolean("clearKey", false)) {
             edit.remove("encryptedKey").remove("keyIv");
         } else if (input.has("apiKey") && !input.optString("apiKey").trim().isEmpty()) {

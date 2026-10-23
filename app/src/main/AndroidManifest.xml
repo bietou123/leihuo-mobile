@@ -21,6 +21,11 @@
         android:theme="@style/AppTheme"
         android:enableOnBackInvokedCallback="false">
         <activity
+            android:name=".NasLoginActivity"
+            android:exported="false"
+            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".GatewayLoginActivity"
             android:exported="false"
             android:configChanges="keyboardHidden|orientation|screenSize|uiMode"

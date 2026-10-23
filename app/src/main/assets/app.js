@@ -15,6 +15,7 @@
   let mediaOptions = read('leihuo.media-options.v1', { duration:8, aspectRatio:'16:9', resolution:'720p', generateAudio:true, voice:'', style:'', speed:1 });
   const audioOptionsByModel=read('leihuo.audio-options.v1',{}),videoOptionsByModel=read('leihuo.video-options.v1',{});
   let config = { baseUrl: 'https://ai.leihuo.netease.com', hasKey: false }, renderTimer = null, forceScroll = true, draft = '';
+  let nasFormOrigin = '';
   const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon = name => `<svg class="icon" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
   const uuid = () => window.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -119,12 +120,54 @@
     catch { pickingImages = false; imagePickerChat = null; resizeComposer(); toast('无法打开照片选择器，请重试。', true); }
   }
   function getConfig() {
-    try { config = JSON.parse(native?.getConfig() || '{}'); } catch { /* browser preview */ }
+    try { if (native?.getConfig) config = JSON.parse(native.getConfig() || '{}'); } catch { /* browser preview */ }
     config.baseUrl ||= 'https://ai.leihuo.netease.com';
     $('baseUrlInput').value = config.baseUrl;
-    $('apiKeyInput').placeholder = config.hasKey ? '已安全保存，留空保持当前密钥' : '粘贴你的雷火 API Key';
+    $('nasLoginUrlInput').value = config.nasLoginUrl || '';
+    updateNasSettings();
     $('connectionStatus').textContent = config.hasKey ? '密钥已加密保存在此手机' : '添加 API Key 后即可使用';
     $('connectionBanner').hidden = !!config.hasKey;
+  }
+  function isNasAddress(value = config.baseUrl) {
+    try { const url = new URL(value); return url.protocol === 'https:' && url.pathname.replace(/\/+$/, '') === '/app/leihuo'; }
+    catch { return false; }
+  }
+  function updateNasSettings() {
+    const baseUrl = $('baseUrlInput').value.trim(), nas = isNasAddress(baseUrl);
+    const origin = nas ? new URL(baseUrl).origin : '';
+    const loginInput = $('nasLoginUrlInput');
+    if (nas && (!loginInput.value || (nasFormOrigin && loginInput.value === `${nasFormOrigin}/`))) loginInput.value = `${origin}/`;
+    nasFormOrigin = origin;
+    $('nasConnectionSection').hidden = !nas;
+    $('nasLoginButton').disabled = !native?.loginNas;
+    $('syncInterfacesButton').hidden = nas;
+    $('apiKeyLabel').textContent = nas ? 'NAS API Key' : 'API Key';
+    $('apiKeyInput').placeholder = config.hasKey ? '已安全保存，留空保持当前密钥' : nas ? '输入独立的 NAS API 访问密钥' : '粘贴你的雷火 API Key';
+    $('apiKeyHint').textContent = nas ? '使用 NAS 服务提供的独立访问密钥；密钥仅加密保存在这台手机上。' : '密钥仅保存在这台设备上。';
+    $('baseUrlHint').textContent = nas ? '填写 NAS 设置页提供的手机 App 服务地址，保留 /app/leihuo；App 会自动追加 API 路径。' : '填写雷火网关地址，或 NAS 设置页提供的手机 App 服务地址。';
+    if (nas) $('interfaceSyncStatus').textContent = '官方专用接口同步仅适用于雷火官方地址；NAS 模型使用 NAS 服务提供的接口。';
+    else if ($('interfaceSyncStatus').textContent.startsWith('官方专用接口同步')) $('interfaceSyncStatus').textContent = '使用雷火官方用户中心同步专用接口，登录信息只留在官方页面。';
+  }
+  function saveSettingsFromForm() {
+    const baseUrl = $('baseUrlInput').value.trim(), apiKey = $('apiKeyInput').value.trim();
+    if (!/^https:\/\//i.test(baseUrl)) throw new Error('请填写 https:// 开头的雷火网关或 NAS 地址。');
+    const nas = isNasAddress(baseUrl), nasLoginUrl = $('nasLoginUrlInput').value.trim();
+    if (native) {
+      const result = JSON.parse(native.saveConfig(JSON.stringify({baseUrl,...(apiKey?{apiKey}:{}),...(nas?{nasLoginUrl}:{})})));
+      if (!result.ok) throw new Error(result.error || '保存失败');
+    } else config = {...config,baseUrl,hasKey:!!apiKey || !!config.hasKey,nasSessionEnabled:nas,...(nas?{nasLoginUrl}:{})};
+    prefs.theme = $('themeSelect').value; prefs.systemPrompt = $('systemPromptInput').value;
+    savePrefs(); applyTheme(); $('apiKeyInput').value = ''; getConfig();
+  }
+  function loginNas() {
+    if (!native?.loginNas) { toast('请在支持 NAS 登录的手机安装版中使用此功能。', true); return; }
+    try {
+      saveSettingsFromForm();
+      if (!config.nasSessionEnabled) throw new Error('请填写并保存以 /app/leihuo 结尾的 NAS HTTPS 服务地址。');
+      $('nasLoginButton').disabled = true;
+      $('nasLoginStatus').textContent = '设置已保存，正在打开 NAS 登录页面…';
+      native.loginNas();
+    } catch (error) { $('nasLoginButton').disabled = false; toast(error.message, true); }
   }
   function applyTheme() {
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -180,6 +223,17 @@
   }
   window.__nativeEvent = event => {
     if (typeof event === 'string') { try { event = JSON.parse(event); } catch { return; } }
+    if (event.id === 'nas-login') {
+      $('nasLoginButton').disabled = !native?.loginNas;
+      if (event.type === 'data') {
+        getConfig(); $('nasLoginStatus').textContent = '登录页面已关闭，正在刷新模型。';
+        toast(event.data || '正在重新连接 NAS'); closeSheets(); refreshModels(true);
+      } else if (event.type === 'error') {
+        $('nasLoginStatus').textContent = event.data || '无法打开 NAS 登录页面，请检查登录地址。';
+        toast($('nasLoginStatus').textContent, true);
+      } else if (event.type === 'done') $('nasLoginStatus').textContent = '登录页面已关闭；完成 NAS 登录后可刷新模型。';
+      return;
+    }
     if (event.id === 'imagePicker') {
       try { native?.clearPickedImages?.(); } catch { /* older bridge */ }
       const pickerEventId = typeof event.pickerEventId === 'string' ? event.pickerEventId : '';
@@ -238,24 +292,31 @@
     return false;
   };
   function humanError(raw, status) {
+    if (isNasAddress() && (status === 401 || status === 403)) return 'NAS 拒绝了请求，请在设置中检查 NAS API Key，并重新登录 NAS。';
     if (status === 401 || status === 403) return '密钥无效或没有此模型的权限，请在设置中检查雷火 API Key。';
     if (status === 429) return '网关请求过多或额度不足，请稍后重试或检查账户额度。';
     let text = String(raw || '请求失败');
     try { const obj = JSON.parse(text); text = obj.error?.message || obj.message || text; } catch { /* text */ }
-    if (/<html|<!doctype/i.test(text)) return `网关返回网页${status ? `（HTTP ${status}）` : ''}，请确认手机能访问雷火网络，且地址填写的是 API 网关。`;
-    return text.slice(0, 600).replace(/\bsk-[\w-]+/g, '[已隐藏密钥]');
+    if (/<html|<!doctype/i.test(text)) return isNasAddress() ? 'NAS 返回了登录页面，请在设置中点“登录 NAS”，完成 FN Connect 连接和飞牛登录后再刷新模型。' : `网关返回网页${status ? `（HTTP ${status}）` : ''}，请确认手机能访问雷火网络，且地址填写的是 API 网关。`;
+    return providerErrorText(text).slice(0, 600).replace(/\bsk-[\w-]+/g, '[已隐藏密钥]');
+  }
+  function providerErrorText(message) {
+    const text=String(message || '模型调用失败');
+    if(/output video may be related to copyright restrictions/i.test(text))return '模型因输出视频可能涉及版权限制而拒绝生成。请使用原创角色或调整描述后再试。';
+    return text;
   }
   async function refreshModels(silent = false) {
     if (!config.hasKey) { if (!silent) { showSheet('settingsSheet'); toast('先填写雷火 API Key。'); } return; }
     const buttons = [$('refreshModelsButton'), $('settingsRefreshButton')]; buttons.forEach(el => el.disabled = true);
     try {
       const data = await request('/v1/models').promise;
+      if (isNasAddress() && typeof data === 'string' && /<html|<!doctype/i.test(data)) throw new Error('NAS 返回了登录页面，请在设置中点“登录 NAS”，完成 FN Connect 连接和飞牛登录后再刷新模型。');
       if (!Array.isArray(data.data) || !data.data.length) throw new Error('网关没有返回可用模型列表。');
       models = data.data.filter(model => model && typeof model.id === 'string');
       localStorage.setItem(MODEL_STORE, JSON.stringify(models)); ensureModel(); renderModels(); updateModelLabel();
       $('connectionStatus').textContent = `已连接 · ${models.length} 个模型`;
       if (!silent) toast(`已更新 ${models.length} 个模型`);
-    } catch (error) { if (!silent) toast(error.message, true); $('connectionStatus').textContent = '连接失败，请检查密钥和手机网络'; }
+    } catch (error) { if (!silent) toast(error.message, true); $('connectionStatus').textContent = isNasAddress() ? error.message : '连接失败，请检查密钥和手机网络'; }
     finally { buttons.forEach(el => el.disabled = false); }
   }
   function applyInterfaces(value) {
@@ -264,12 +325,32 @@
     for(const [type,route] of Object.entries(routes)) {
       if(!route || typeof route.path!=='string' || !route.path.startsWith('/') || route.path.startsWith('//') || /[\r\n\\]/.test(route.path))continue;
       const method=String(route.method || 'POST').toUpperCase();if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))continue;
-      endpointMap[type]={...(endpointMap[type] || {}),type,path:route.path,method,synced:true};count++;
+      const previous=endpointMap[type] || {};
+      const updated={...previous,type,path:route.path,method,synced:true};
+      // Retain a confirmed query mapping without copying headers, bodies or
+      // response selectors from interface metadata. A changed submit route
+      // must not inherit the previous route's query mapping.
+      if(previous.path!==route.path || Object.prototype.hasOwnProperty.call(route,'task'))delete updated.task;
+      const task=route.task;
+      if(task?.synced===true && String(task.method || '').toUpperCase()==='GET'
+        && validSyncedTaskPath(task.path))updated.task={path:task.path,method:'GET',synced:true};
+      endpointMap[type]=updated;count++;
     }
-    $('interfaceSyncStatus').textContent=count?`已同步 ${count} 类接口 · ${value.syncedAt ? new Date(value.syncedAt).toLocaleDateString() : '来自雷火官方页面'}`:'使用雷火官方用户中心同步专用接口，登录信息只留在官方页面。';
+    if (!isNasAddress()) $('interfaceSyncStatus').textContent=count?`已同步 ${count} 类接口 · ${value.syncedAt ? new Date(value.syncedAt).toLocaleDateString() : '来自雷火官方页面'}`:'使用雷火官方用户中心同步专用接口，登录信息只留在官方页面。';
     resizeComposer();
   }
-  function syncInterfaces() { if(native?.syncInterfaces)native.syncInterfaces();else toast('请在手机安装版中登录雷火并同步接口。'); }
+  function validSyncedTaskPath(path) {
+    if(typeof path!=='string' || path.length>2048 || !/^\/(?!\/)/.test(path)
+      || /[\s\\\u0000-\u001f\u007f#]/.test(path) || /%(?![0-9a-f]{2})/i.test(path)
+      || path.split('$TASK_ID').length!==2)return false;
+    try {
+      const decoded=decodeURIComponent(path.split('?')[0]);
+      if(decoded.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(decoded)
+        || /%(?:2e|2f|5c|25)/i.test(decoded) || decoded.split('/').some(part=>part==='.' || part==='..'))return false;
+      return new URL(path,'https://leihuo.invalid').origin==='https://leihuo.invalid';
+    }catch{return false;}
+  }
+  function syncInterfaces() { if(isNasAddress($('baseUrlInput').value)){toast('专用接口同步仅适用于雷火官方地址；NAS 模型使用 NAS 服务提供的接口。');return;}if(native?.syncInterfaces)native.syncInterfaces();else toast('请在手机安装版中登录雷火并同步接口。'); }
   function videoOptions(model) { return {...(window.LeihuoVideo?.defaultsFor?.(model) || {duration:8,aspectRatio:'16:9',resolution:'720p',generateAudio:true}),...(videoOptionsByModel[model.id] || {})}; }
   function kind(model) {
     const id = model.id.toLowerCase(), endpoints = model.supported_endpoint_types || [];
@@ -644,7 +725,7 @@
   }
   function responseFailure(result,message,source='provider') {
     const reason=String(message || '模型调用失败');
-    return Object.assign(new Error(reason),window.LeihuoErrors?.fromResponse?.(result) || {},{errorSource:source,safeMessage:window.LeihuoErrors?.safeMessage?.(reason)});
+    return Object.assign(new Error(providerErrorText(reason)),window.LeihuoErrors?.fromResponse?.(result) || {},{errorSource:source,safeMessage:window.LeihuoErrors?.safeMessage?.(reason)});
   }
   async function waitForTask(milliseconds,run) {
     ensureRun(run);
@@ -876,6 +957,8 @@
     const openSettings=()=>{getConfig();$('systemPromptInput').value=prefs.systemPrompt;applyTheme();showSheet('settingsSheet');};
     $('settingsButton').onclick=openSettings;$('connectionSettingsButton').onclick=openSettings;
     $('syncInterfacesButton').onclick=syncInterfaces;
+    $('baseUrlInput').oninput=updateNasSettings;
+    $('nasLoginButton').onclick=loginNas;
     $('composerModelBadge').onclick=openMediaSettings;
     $('audioSampleButton').onclick=()=>$('audioInput').click();
     $('mediaSettingsForm').onsubmit=event=>{event.preventDefault();const values={};$('mediaSettingsFields').querySelectorAll('[data-media-option]').forEach(input=>{values[input.dataset.mediaOption]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;});const id=$('mediaSettingsForm').dataset.model;if($('mediaSettingsForm').dataset.kind==='video'){values.duration=Number(values.duration);videoOptionsByModel[id]=values;localStorage.setItem('leihuo.video-options.v1',JSON.stringify(videoOptionsByModel));}else{audioOptionsByModel[id]=values;localStorage.setItem('leihuo.audio-options.v1',JSON.stringify(audioOptionsByModel));}resizeComposer();closeSheets();toast('媒体设置已保存');};
@@ -887,10 +970,7 @@
     $('refreshModelsButton').onclick=()=>refreshModels();$('settingsRefreshButton').onclick=()=>refreshModels();
     $('settingsForm').onsubmit=async e=>{
       e.preventDefault();try{
-        const baseUrl=$('baseUrlInput').value.trim(),apiKey=$('apiKeyInput').value.trim();
-        if(!/^https:\/\//i.test(baseUrl))throw new Error('请填写 https:// 开头的雷火 API 地址。');
-        if(native){const result=JSON.parse(native.saveConfig(JSON.stringify({baseUrl,...(apiKey?{apiKey}:{})})));if(!result.ok)throw new Error(result.error || '保存失败');}else config={baseUrl,hasKey:!!apiKey};
-        prefs.theme=$('themeSelect').value;prefs.systemPrompt=$('systemPromptInput').value;savePrefs();applyTheme();$('apiKeyInput').value='';getConfig();toast('设置已保存');closeSheets();await refreshModels(true);
+        saveSettingsFromForm();toast('设置已保存');closeSheets();await refreshModels(true);
       }catch(error){toast(error.message,true);}
     };
     $('keyVisibilityButton').onclick=()=>{const input=$('apiKeyInput');input.type=input.type==='password'?'text':'password';};
